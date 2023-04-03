@@ -37,7 +37,7 @@ impl fmt::Display for Block {
 }
 
 pub struct RetStmt {
-    pub ret_num:i64,   
+    pub ret_num:i32,   
 }
 
 impl fmt::Display for RetStmt {
