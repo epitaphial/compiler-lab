@@ -49,16 +49,12 @@ impl fmt::Display for RetStmt {
 #[derive(Debug)]
 pub enum FuncType{
     TypeInt,
-    TypeDouble,
-    TypeFloat,
-    TypeVoid,
 }
 
 impl fmt::Display for FuncType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FuncType::TypeInt=>write!(f,"int"),
-            _=>write!(f,"other type")
         }
     }
 }
