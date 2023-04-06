@@ -13,7 +13,7 @@ pub CompUnit:ast::CompUnit = {
 };
 
 FuncDef:ast::FuncDef = {
-    <func_type:FuncType> <func_ident:Ident> "(" ")" <block:Block> => ast::FuncDef{<>},
+    <func_type:FuncType> <func_ident:Ident> "()" <block:Block> => ast::FuncDef{<>},
 };
 
 
@@ -25,6 +25,7 @@ Block:ast::Block = {
     "{" <ret_stmt:RetStmt> "}" => ast::Block{<>},
 };
 
+// RetStmt ::= "return" Exp ";";
 RetStmt:ast::RetStmt = {
     "return" <ret_num:Int_const> ";" => ast::RetStmt{<>},
 };

@@ -15,7 +15,7 @@ enum Asm {
         bb_list: Vec<crate::asmgen::Asm>,
     },
     BasicBlockAsm {
-        bb_name: String,
+        //bb_name: String,
         inst_list: Vec<crate::asmgen::Asm>,
     },
     InstAsm {
@@ -65,7 +65,7 @@ impl GenerateAsm for BasicBlockData {
 
         }
         Asm::BasicBlockAsm {
-            bb_name: String::from(self.name().as_ref().unwrap()),
+            //bb_name: String::from(self.name().as_ref().unwrap()),
             inst_list: inst_list,
         }
     }
@@ -98,23 +98,25 @@ impl GenerateAsm for ValueData {
 
 pub fn gen_asm(program: &Program, output_name: &String) {
     let asm = program.generate(None);
-    println!("{:#?}", asm);
+    //println!("{:#?}", asm);
     let mut output_file = File::create(output_name).unwrap();
     match asm {
         Asm::ProgramAsm { func_list } => {
             for func in func_list {
                 match func {
                     Asm::FunctionAsm { func_name, bb_list } => {
-                        output_file.write(format!("{}\n",func_name).as_bytes()).unwrap();
+                        output_file.write(".text\n".as_bytes()).unwrap();
+                        output_file.write(format!(".globl {}\n",&func_name[1..]).as_bytes()).unwrap();
+                        output_file.write(format!("{}:",&func_name[1..]).as_bytes()).unwrap();
                         for bb in bb_list {
                             match bb {
-                                Asm::BasicBlockAsm { bb_name, inst_list } => {
+                                Asm::BasicBlockAsm { /*bb_name,*/ inst_list } => {
                                     //output_file.write(bb_name.as_bytes()).unwrap();
                                     for inst in inst_list {
                                         match inst {
                                             Asm::InstAsm { inst_strs } => {
                                                 for inst_str in inst_strs {
-                                                    output_file.write(format!("{}\n",inst_str).as_bytes()).unwrap();
+                                                    output_file.write(format!("\n   {}",inst_str).as_bytes()).unwrap();
                                                 }
                                             }
                                             _ => panic!("Not a inst!"),

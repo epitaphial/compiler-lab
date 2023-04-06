@@ -1,60 +1,85 @@
 use std::fmt::{self};
 
-pub struct CompUnit {
-    pub func_def:FuncDef,
+// Expect: CompUnit ::= [CompUnit] (Decl | FuncDef);
+// Now: CompUnit ::= [CompUnit] FuncDef;
+pub enum CompUnit {
+    FuncDef(Box<FuncDef>),
 }
 
-impl fmt::Display for CompUnit{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,"comp_unit{{\n{}\n}}",self.func_def)
-    }
-}
-
+// Expect: FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
+// Now: FuncDef ::= FuncType IDENT "()" Block;
 pub struct FuncDef {
-    pub func_type:FuncType,
-    pub func_ident:String,
-    pub block:Block,
+    pub func_type: FuncType,
+    pub func_ident: String,
+    pub block: Block,
 }
 
-impl fmt::Display for FuncDef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,"func_def{{\n\
-            func_type: {}\n\
-            func_ident: {}\n\
-            block: {}\n\
-        }}",self.func_type,self.func_ident,self.block)
-    }
+// FuncType ::= "void" | "int";
+enum FuncType {
+    VOID,
+    INT,
 }
 
-pub struct Block {
-    pub ret_stmt:RetStmt,
+// Block ::= "{" BlockItemList "}" | "{" "}";
+pub enum Block {
+    BlockItemList,
+    VoidBlock,
 }
 
-impl fmt::Display for Block {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,"block{{\n{}\n}}",self.ret_stmt)
-    }
+// BlockItemList ::= BlockItemList BlockItem;
+pub struct BlockItemList{
+    block_item_list:Box<Vec<BlockItem>>,
 }
 
-pub struct RetStmt {
-    pub ret_num:i32,   
+
+// Expect: BlockItem ::= Decl | Stmt;
+// Now: BlockItem ::= Stmt;
+pub enum BlockItem {
+    Stmt(),
 }
 
-impl fmt::Display for RetStmt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,"retstmt{{\nretnum: {}\n}}",self.ret_num)
-    }
+// Expect: Stmt ::= LVal "=" Exp ";"
+// | [Exp] ";"
+// | Block
+// | "if" "(" Exp ")" Stmt ["else" Stmt]
+// | "while" "(" Exp ")" Stmt
+// | "break" ";"
+// | "continue" ";"
+// | RetStmt;
+// Now: Stmt ::= RetStmt;
+pub enum Stmt {
+    RetStmt(),
 }
 
-#[derive(Debug)]
-pub enum FuncType{
-    TypeInt,
+// RetStmt ::= "return" Exp ";" | "return" ";";
+pub enum RetStmt {
+    Exp,
+    VoidRetStmt,
 }
 
-impl fmt::Display for FuncType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FuncType::TypeInt=>write!(f,"int"),
-        }
-    }
+
+// Expect: Exp ::= LOrExp;
+// Now: Exp ::= UnaryExp;
+pub struct Exp {
+    unary_exp:Box<UnaryExp>,
+}
+
+// Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
+// Now: UnaryExp    ::= PrimaryExp | UnaryOp UnaryExp;
+pub enum UnaryExp {
+    PrimaryExp(),
+    UnaryExp(),
+}
+
+// UnaryOp ::= "+" | "-" | "!";
+pub enum UnaryOp {
+    PLUS,
+    MINUS,
+    NOT,
+}
+
+// Expect: PrimaryExp ::= "(" Exp ")" | LVal | Number;
+// Now: PrimaryExp ::= "(" Exp ")" | Number;
+pub enum PrimaryExp {
+    
 }
