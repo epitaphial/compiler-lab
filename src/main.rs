@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     match output_mode.as_str() {
         "-koopa"=>{
             let program = parser::parse(&source_code)?;
-            parser::gen_ir(program, output_name)?;
+            //parser::gen_ir(program, output_name)?;
         },
         "-riscv"=>{
             let program = parser::parse(&source_code)?;

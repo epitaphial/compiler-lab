@@ -1,6 +1,7 @@
 use crate::ast;
 grammar;
 
+// Skip whitespace and comments
 match {
     r"\s*"=>{},
     r"//[^\n\r]*[\n\r]*"=>{},
@@ -9,11 +10,11 @@ match {
 }
 
 pub CompUnit:ast::CompUnit = {
-    <func_def:FuncDef> => ast::CompUnit{<>},
+    FuncDef => ast::CompUnit::FuncDef(<>),
 };
 
 FuncDef:ast::FuncDef = {
-    <func_type:FuncType> <func_ident:Ident> "()" <block:Block> => ast::FuncDef{<>},
+    <func_type:FuncType> <func_ident:Ident> "(" ")" <block:Block> => ast::FuncDef{<>},
 };
 
 
@@ -22,12 +23,59 @@ FuncType:ast::FuncType = {
 };  
 
 Block:ast::Block = {
-    "{" <ret_stmt:RetStmt> "}" => ast::Block{<>},
+    "{" <BlockItems> "}" => ast::Block::BlockItems(<>),
+    "{" "}" => ast::Block::Void,
 };
 
-// RetStmt ::= "return" Exp ";";
+BlockItems:ast::BlockItems = {
+    <mut block_items:BlockItems> <block_item:BlockItem> => {
+        block_items.push(block_item);
+        block_items
+    },
+    BlockItem => vec![<>],
+};
+
+BlockItem:ast::BlockItem = {
+    Stmt => ast::BlockItem::Stmt(<>),
+};
+
+Stmt:ast::Stmt = {
+    RetStmt => ast::Stmt::RetStmt(<>),
+};
+
+// RetStmt ::= "return" Exp ";" | "return" ";";
 RetStmt:ast::RetStmt = {
-    "return" <ret_num:Int_const> ";" => ast::RetStmt{<>},
+    "return" <Exp> ";" => ast::RetStmt::Exp(<>),
+    "return" ";" => ast::RetStmt::Void,
+};
+
+// Expect: Exp ::= LOrExp;
+// Now: Exp ::= UnaryExp;
+Exp:ast::Exp = {
+    UnaryExp => ast::Exp{
+        unary_exp: <>,
+    },
+};
+
+// Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
+// Now: UnaryExp ::= PrimaryExp | UnaryOp UnaryExp;
+UnaryExp:ast::UnaryExp = {
+    PrimaryExp => ast::UnaryExp::PrimaryExp(Box::new(<>)),
+    <unary_op:UnaryOp> <unary_exp:UnaryExp> => ast::UnaryExp::UnaryOp(unary_op,Box::new(unary_exp)),
+};
+
+// UnaryOp ::= "+" | "-" | "!";
+UnaryOp:ast::UnaryOp = {
+    "+" => ast::UnaryOp::Plus,
+    "-" => ast::UnaryOp::Minus,
+    "!" => ast::UnaryOp::Not,
+};
+
+// Expect: PrimaryExp ::= "(" Exp ")" | LVal | Number;
+// Now: PrimaryExp ::= "(" Exp ")" | Number;
+PrimaryExp:ast::PrimaryExp = {
+    "(" <Exp> ")" => ast::PrimaryExp::Exp(<>),
+    Number => ast::PrimaryExp::Number,
 };
 
 
@@ -35,7 +83,11 @@ Ident:String = {
     r"[a-zA-Z_][a-zA-Z_0-9]*" => <>.to_string(),
 };
 
-Int_const:i32 = {
+Number:ast::Number = {
+    IntConst => ast::Number::IntConst(<>),
+}
+
+IntConst:i32 = {
     r"[1-9][0-9]*" => i32::from_str_radix(<>,10).unwrap(),
     r"0[0-7]*" => i32::from_str_radix(<>,8).unwrap(),
     r"0[xX][0-9A-Fa-f]+" => i32::from_str_radix(&<>[2..],16).unwrap(),

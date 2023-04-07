@@ -1,9 +1,16 @@
-use std::fmt::{self};
+use std::fmt;
 
 // Expect: CompUnit ::= [CompUnit] (Decl | FuncDef);
 // Now: CompUnit ::= [CompUnit] FuncDef;
 pub enum CompUnit {
-    FuncDef(Box<FuncDef>),
+    FuncDef(FuncDef),
+}
+
+impl fmt::Debug for CompUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let CompUnit::FuncDef(func_def) = self;
+        write!(f, "CompUnit{{\n{:#?}\n}}", func_def)
+    }
 }
 
 // Expect: FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
@@ -14,28 +21,52 @@ pub struct FuncDef {
     pub block: Block,
 }
 
+impl fmt::Debug for FuncDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FuncDef{{\nfunc_type:{:#?}\nfunc_ident:\"{}\"\nblock:{:#?}\n}}", self.func_type,self.func_ident,self.block)
+    }
+}
+
 // FuncType ::= "void" | "int";
-enum FuncType {
-    VOID,
-    INT,
+#[derive(Debug)]
+pub enum FuncType {
+    TypeVoid,
+    TypeInt,
 }
 
-// Block ::= "{" BlockItemList "}" | "{" "}";
+impl fmt::Debug for CompUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FuncType::TypeVoid =>{
+
+            },
+            FuncType::TypeInt=>{
+
+            }
+        }
+    }
+}
+
+// Block ::= "{" BlockItems "}" | "{" "}";
+#[derive(Debug)]
 pub enum Block {
-    BlockItemList,
-    VoidBlock,
+    BlockItems(BlockItems),
+    Void,
 }
 
-// BlockItemList ::= BlockItemList BlockItem;
-pub struct BlockItemList{
-    block_item_list:Box<Vec<BlockItem>>,
-}
-
+// BlockItems ::= BlockItems BlockItem | BlockItem;
+// #[derive(Debug)]
+// pub enum BlockItems {
+//     BlockItems(Vec<BlockItem>),
+//     BlockItem,
+// }
+pub type BlockItems = Vec<BlockItem>;
 
 // Expect: BlockItem ::= Decl | Stmt;
 // Now: BlockItem ::= Stmt;
+#[derive(Debug)]
 pub enum BlockItem {
-    Stmt(),
+    Stmt(Stmt),
 }
 
 // Expect: Stmt ::= LVal "=" Exp ";"
@@ -47,39 +78,50 @@ pub enum BlockItem {
 // | "continue" ";"
 // | RetStmt;
 // Now: Stmt ::= RetStmt;
+#[derive(Debug)]
 pub enum Stmt {
-    RetStmt(),
+    RetStmt(RetStmt),
 }
 
 // RetStmt ::= "return" Exp ";" | "return" ";";
+#[derive(Debug)]
 pub enum RetStmt {
-    Exp,
-    VoidRetStmt,
+    Exp(Exp),
+    Void,
 }
-
 
 // Expect: Exp ::= LOrExp;
 // Now: Exp ::= UnaryExp;
+#[derive(Debug)]
 pub struct Exp {
-    unary_exp:Box<UnaryExp>,
+    pub unary_exp: UnaryExp,
 }
 
 // Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
 // Now: UnaryExp    ::= PrimaryExp | UnaryOp UnaryExp;
+#[derive(Debug)]
 pub enum UnaryExp {
-    PrimaryExp(),
-    UnaryExp(),
+    PrimaryExp(Box<PrimaryExp>),
+    UnaryOp(UnaryOp, Box<UnaryExp>),
 }
 
 // UnaryOp ::= "+" | "-" | "!";
+#[derive(Debug)]
 pub enum UnaryOp {
-    PLUS,
-    MINUS,
-    NOT,
+    Plus,
+    Minus,
+    Not,
 }
 
 // Expect: PrimaryExp ::= "(" Exp ")" | LVal | Number;
 // Now: PrimaryExp ::= "(" Exp ")" | Number;
+#[derive(Debug)]
 pub enum PrimaryExp {
-    
+    Exp(Exp),
+    Number,
+}
+
+#[derive(Debug)]
+pub enum Number {
+    IntConst(i32),
 }
