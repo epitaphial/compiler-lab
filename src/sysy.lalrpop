@@ -20,6 +20,7 @@ FuncDef:ast::FuncDef = {
 
 FuncType:ast::FuncType = {
     "int" => ast::FuncType::TypeInt,
+    "void" => ast::FuncType::TypeVoid,
 };  
 
 Block:ast::Block = {
@@ -75,7 +76,7 @@ UnaryOp:ast::UnaryOp = {
 // Now: PrimaryExp ::= "(" Exp ")" | Number;
 PrimaryExp:ast::PrimaryExp = {
     "(" <Exp> ")" => ast::PrimaryExp::Exp(<>),
-    Number => ast::PrimaryExp::Number,
+    Number => ast::PrimaryExp::Number(<>),
 };
 
 
