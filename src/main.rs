@@ -17,14 +17,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_name = &args[4];
     let source_code = fs::read_to_string(input_name)?;
     fs::File::create(output_name)?;
-    let mut parser = Parser::new(&source_code);
+    let mut parser = Parser::new();
     match output_mode.as_str() {
         "-koopa"=>{
-            let program = parser.parse()?;
-            //parser::gen_ir(program, output_name)?;
+            parser.parse(&source_code)?;
+            parser.gen_ir(output_name)?;
         },
         "-riscv"=>{
-            let program = parser.parse()?;
+            let program = parser.parse(&source_code)?;
             asmgen::gen_asm(&program, output_name);
         },
         _=>{},

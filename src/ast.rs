@@ -1,7 +1,8 @@
+use std::{
+    fmt,
+};
 
-use std::fmt;
-
-use koopa::ir::Function;
+use koopa::ir::{BasicBlock, Function};
 
 // Expect: CompUnit ::= [CompUnit] (Decl | FuncDef);
 // Now: CompUnit ::= FuncDef;
@@ -132,23 +133,86 @@ impl fmt::Debug for RetStmt {
     }
 }
 
-// Expect: Exp ::= LOrExp;
-// Now: Exp ::= UnaryExp;
+// Exp ::= LOrExp;
+#[derive(Debug)]
 pub struct Exp {
-    pub unary_exp: UnaryExp,
+    pub l_or_exp: Box<LOrExp>,
 }
 
-impl fmt::Debug for Exp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Exp{{\nunary_exp:{:#?}}}\n", self.unary_exp)
-    }
+// impl fmt::Debug for Exp {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "Exp{{\nunary_exp:{:#?}}}\n", self.l_or_exp)
+//     }
+// }
+
+// LOrExp ::= LAndExp | LOrExp "||" LAndExp;
+#[derive(Debug)]
+pub enum LOrExp {
+    LAndExp(LAndExp),
+    BinaryOp(Box<LOrExp>, LAndExp),
+}
+
+// LAndExp ::= EqExp | LAndExp "&&" EqExp;
+#[derive(Debug)]
+pub enum LAndExp {
+    EqExp(EqExp),
+    BinaryOp(Box<LAndExp>, EqExp),
+}
+
+// EqExp ::= RelExp | EqExp ("==" | "!=") RelExp;
+#[derive(Debug)]
+pub enum EqExp {
+    RelExp(RelExp),
+    BinaryOp(Box<EqExp>, Operator, RelExp),
+}
+
+// RelExp ::= AddExp | RelExp ("<" | ">" | "<=" | ">=") AddExp;
+#[derive(Debug)]
+pub enum RelExp {
+    AddExp(AddExp),
+    BinaryOp(Box<RelExp>, Operator, AddExp),
+}
+
+// MulExp ::= UnaryExp | MulExp ("*" | "/" | "%") UnaryExp;
+#[derive(Debug)]
+pub enum MulExp {
+    UnaryExp(UnaryExp),
+    BinaryOp(Box<MulExp>, Operator, UnaryExp),
+}
+
+// AddExp ::= MulExp | AddExp ("+" | "-") MulExp;
+#[derive(Debug)]
+pub enum AddExp {
+    MulExp(MulExp),
+    BinaryOp(Box<AddExp>, Operator, MulExp),
+}
+
+#[derive(Debug)]
+pub enum Operator {
+    Not,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    GetRemainder,
+    //BitwiseAnd,
+    //BitwiseOr,
+    //BitwiseXor,
+    LogicalAnd,
+    LogicalOr,
+    Equal,
+    NotEqual,
+    LessThan,
+    MoreThan,
+    LessOrEqualThan,
+    MoreOrEqualThan,
 }
 
 // Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
 // Now: UnaryExp    ::= PrimaryExp | UnaryOp UnaryExp;
 pub enum UnaryExp {
-    PrimaryExp(Box<PrimaryExp>),
-    UnaryOp(UnaryOp, Box<UnaryExp>),
+    PrimaryExp(PrimaryExp),
+    UnaryOp(Operator, Box<UnaryExp>),
 }
 
 impl fmt::Debug for UnaryExp {
@@ -159,29 +223,6 @@ impl fmt::Debug for UnaryExp {
             }
             UnaryExp::UnaryOp(unary_op, unary_exp) => {
                 write!(f, "UnaryExp{{\n{:#?}{:#?}}}\n", unary_op, unary_exp)
-            }
-        }
-    }
-}
-
-// UnaryOp ::= "+" | "-" | "!";
-pub enum UnaryOp {
-    Plus,
-    Minus,
-    Not,
-}
-
-impl fmt::Debug for UnaryOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            UnaryOp::Plus => {
-                write!(f, "UnaryOp{{\nPlus\n}}\n")
-            }
-            UnaryOp::Minus => {
-                write!(f, "UnaryOp{{\nMinus\n}}\n")
-            }
-            UnaryOp::Not => {
-                write!(f, "UnaryOp{{\nNot\n}}\n")
             }
         }
     }
@@ -224,9 +265,14 @@ impl fmt::Debug for Number {
 pub trait Visitor<T> {
     fn visit_comp_unit(&mut self, comp_unit: &CompUnit) -> T;
     fn visit_func_def(&mut self, func_def: &FuncDef) -> T;
-    fn visit_block(&mut self, block: &Block,function:&Function) -> T;
-    fn visit_block_item(&mut self, block_item: &BlockItem, function: &Function) -> T;
-    fn visit_stmt(&mut self, stmt: &Stmt, function: &Function) -> T;
-    fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt) -> T;
-    fn visit_exp(&mut self, exp: &Exp) -> T;
+    fn visit_block(&mut self, block: &Block, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_block_item(
+        &mut self,
+        block_item: &BlockItem,
+        function: &Function,
+        bb: &BasicBlock,
+    ) -> T;
+    fn visit_stmt(&mut self, stmt: &Stmt, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_exp(&mut self, exp: &Exp, function: &Function, bb: &BasicBlock) -> T;
 }

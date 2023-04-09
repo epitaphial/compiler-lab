@@ -50,26 +50,89 @@ RetStmt:ast::RetStmt = {
     "return" ";" => ast::RetStmt::Void,
 };
 
-// Expect: Exp ::= LOrExp;
-// Now: Exp ::= UnaryExp;
+// Exp ::= LOrExp;
 Exp:ast::Exp = {
-    UnaryExp => ast::Exp{
-        unary_exp: <>,
+    LOrExp => ast::Exp{
+        l_or_exp: Box::new(<>),
     },
+};
+
+// LOrExp ::= LAndExp | LOrExp "||" LAndExp;
+LOrExp:ast::LOrExp = {
+    LAndExp => ast::LOrExp::LAndExp(<>),
+    <l_or_exp:LOrExp> "||" <l_and_exp:LAndExp> =>ast::LOrExp::BinaryOp(Box::new(l_or_exp),l_and_exp),
+};
+
+// LAndExp ::= EqExp | LAndExp "&&" EqExp;
+LAndExp:ast::LAndExp = {
+    EqExp => ast::LAndExp::EqExp(<>),
+    <l_and_exp:LAndExp> "&&" <eq_exp:EqExp> => ast::LAndExp::BinaryOp(Box::new(l_and_exp),eq_exp),
+
+};
+
+// EqExp ::= RelExp | EqExp ("==" | "!=") RelExp;
+EqExp:ast::EqExp = {
+    RelExp => ast::EqExp::RelExp(<>),
+    <eq_exp:EqExp> <eq_op:EqOp> <rel_exp:RelExp> => ast::EqExp::BinaryOp(Box::new(eq_exp),eq_op,rel_exp),
+};
+
+// EqOp ::= "==" | "!=";
+EqOp:ast::Operator = {
+    "==" => ast::Operator::Equal,
+    "!=" => ast::Operator::NotEqual,
+};
+
+// RelExp ::= AddExp | RelExp ("<" | ">" | "<=" | ">=") AddExp;
+RelExp:ast::RelExp = {
+    AddExp => ast::RelExp::AddExp(<>),
+    <rel_exp:RelExp> <rel_op:RelOp> <add_exp:AddExp> => ast::RelExp::BinaryOp(Box::new(rel_exp),rel_op,add_exp),
+};
+
+// RelOp ::= "<" | ">" | "<=" | ">=";
+RelOp:ast::Operator = {
+    "<" => ast::Operator::LessThan,
+    ">" => ast::Operator::MoreThan,
+    "<=" => ast::Operator::LessOrEqualThan,
+    ">=" => ast::Operator::MoreOrEqualThan,
+};
+
+// AddExp ::= MulExp | AddExp ("+" | "-") MulExp;
+AddExp:ast::AddExp = {
+    MulExp => ast::AddExp::MulExp(<>),
+    <add_exp:AddExp> <add_op:AddOp> <mul_exp:MulExp> => ast::AddExp::BinaryOp(Box::new(add_exp),add_op,mul_exp),
+};
+
+// AddOp ::= "+" | "-";
+AddOp:ast::Operator = {
+    "+" => ast::Operator::Add,
+    "-" => ast::Operator::Subtract,
+};
+
+// MulExp ::= UnaryExp | MulExp ("*" | "/" | "%") UnaryExp;
+MulExp:ast::MulExp = {
+    UnaryExp => ast::MulExp::UnaryExp(<>),
+    <mul_exp:MulExp> <mul_op:MulOp> <unary_exp:UnaryExp> => ast::MulExp::BinaryOp(Box::new(mul_exp),mul_op,unary_exp),
+};
+
+// MulOp ::= "*" | "/" | "%";
+MulOp:ast::Operator = {
+    "*" => ast::Operator::Multiply,
+    "/" => ast::Operator::Divide,
+    "%" => ast::Operator::GetRemainder,
 };
 
 // Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
 // Now: UnaryExp ::= PrimaryExp | UnaryOp UnaryExp;
 UnaryExp:ast::UnaryExp = {
-    PrimaryExp => ast::UnaryExp::PrimaryExp(Box::new(<>)),
+    PrimaryExp => ast::UnaryExp::PrimaryExp(<>),
     <unary_op:UnaryOp> <unary_exp:UnaryExp> => ast::UnaryExp::UnaryOp(unary_op,Box::new(unary_exp)),
 };
 
 // UnaryOp ::= "+" | "-" | "!";
-UnaryOp:ast::UnaryOp = {
-    "+" => ast::UnaryOp::Plus,
-    "-" => ast::UnaryOp::Minus,
-    "!" => ast::UnaryOp::Not,
+UnaryOp:ast::Operator = {
+    "+" => ast::Operator::Add,
+    "-" => ast::Operator::Subtract,
+    "!" => ast::Operator::Not,
 };
 
 // Expect: PrimaryExp ::= "(" Exp ")" | LVal | Number;
