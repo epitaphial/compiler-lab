@@ -1,8 +1,27 @@
-use std::{
-    fmt,
-};
+use std::fmt;
 
 use koopa::ir::{BasicBlock, Function};
+
+#[derive(Debug)]
+pub enum Operator {
+    Not,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    GetRemainder,
+    //BitwiseAnd,
+    //BitwiseOr,
+    //BitwiseXor,
+    _LogicalAnd,
+    _LogicalOr,
+    Equal,
+    NotEqual,
+    LessThan,
+    MoreThan,
+    LessOrEqualThan,
+    MoreOrEqualThan,
+}
 
 // Expect: CompUnit ::= [CompUnit] (Decl | FuncDef);
 // Now: CompUnit ::= FuncDef;
@@ -139,12 +158,6 @@ pub struct Exp {
     pub l_or_exp: Box<LOrExp>,
 }
 
-// impl fmt::Debug for Exp {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "Exp{{\nunary_exp:{:#?}}}\n", self.l_or_exp)
-//     }
-// }
-
 // LOrExp ::= LAndExp | LOrExp "||" LAndExp;
 #[derive(Debug)]
 pub enum LOrExp {
@@ -173,13 +186,6 @@ pub enum RelExp {
     BinaryOp(Box<RelExp>, Operator, AddExp),
 }
 
-// MulExp ::= UnaryExp | MulExp ("*" | "/" | "%") UnaryExp;
-#[derive(Debug)]
-pub enum MulExp {
-    UnaryExp(UnaryExp),
-    BinaryOp(Box<MulExp>, Operator, UnaryExp),
-}
-
 // AddExp ::= MulExp | AddExp ("+" | "-") MulExp;
 #[derive(Debug)]
 pub enum AddExp {
@@ -187,25 +193,11 @@ pub enum AddExp {
     BinaryOp(Box<AddExp>, Operator, MulExp),
 }
 
+// MulExp ::= UnaryExp | MulExp ("*" | "/" | "%") UnaryExp;
 #[derive(Debug)]
-pub enum Operator {
-    Not,
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    GetRemainder,
-    //BitwiseAnd,
-    //BitwiseOr,
-    //BitwiseXor,
-    LogicalAnd,
-    LogicalOr,
-    Equal,
-    NotEqual,
-    LessThan,
-    MoreThan,
-    LessOrEqualThan,
-    MoreOrEqualThan,
+pub enum MulExp {
+    UnaryExp(UnaryExp),
+    BinaryOp(Box<MulExp>, Operator, UnaryExp),
 }
 
 // Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
@@ -275,4 +267,17 @@ pub trait Visitor<T> {
     fn visit_stmt(&mut self, stmt: &Stmt, function: &Function, bb: &BasicBlock) -> T;
     fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, function: &Function, bb: &BasicBlock) -> T;
     fn visit_exp(&mut self, exp: &Exp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_l_or_exp(&mut self, l_or_exp: &LOrExp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_l_and_exp(&mut self, l_and_exp: &LAndExp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_eq_exp(&mut self, eq_exp: &EqExp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_rel_exp(&mut self, rel_exp: &RelExp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_add_exp(&mut self, add_exp: &AddExp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_mul_exp(&mut self, mul_exp: &MulExp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_unary_exp(&mut self, unary_exp: &UnaryExp, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_primary_exp(
+        &mut self,
+        primary_exp: &PrimaryExp,
+        function: &Function,
+        bb: &BasicBlock,
+    ) -> T;
 }

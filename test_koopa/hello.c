@@ -8,6 +8,6 @@ int main()
         //wsdffwfwsfwsfw
         //fwfswwfwfssw
           ////swfwsf
-        return 1;
+        return;
 
     }

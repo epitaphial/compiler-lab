@@ -1,3 +1,4 @@
-fun @main(): i32 {
+fun @main1(): i32 {
 %entry:
+  ret
 }
