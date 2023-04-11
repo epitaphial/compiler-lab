@@ -24,25 +24,11 @@ enum VisitRetType {
     None,
 }
 
-// let func_data = self.program.func_mut(*function);
-// let ret = func_data.dfg_mut().new_value().ret(Some(value));
-// func_data
-//     .layout_mut()
-//     .bb_mut(*bb)
-//     .insts_mut()
-//     .push_key_back(ret)
-//     .unwrap();
-
 macro_rules! funcdata {
     ($self:ident,$func:expr) => {
         $self.program.func_mut($func)
     };
 }
-
-// func_data
-//             .dfg_mut()
-//             .new_bb()
-//             .basic_block(Some("%entry".into()));
 
 macro_rules! basicblock {
     ($func:ident,$bbname:expr) => {
@@ -50,7 +36,6 @@ macro_rules! basicblock {
     };
 }
 
-// func_data.layout_mut().bbs_mut().extend([entry_bb]);
 macro_rules! insertbb {
     ($func:ident,$bb:expr) => {
         $func.layout_mut().bbs_mut().extend($bb)
@@ -62,8 +47,6 @@ macro_rules! value {
         $func.dfg_mut().new_value().$op($($value),+)
     };
 }
-
-// func_data.layout_mut().bb_mut(*bb).insts_mut().extend([ret]);
 
 macro_rules! insertvalue {
     ($func:ident,$bb:expr,$values:expr) => {
