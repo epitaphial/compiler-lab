@@ -8,6 +8,6 @@ int main()
         //wsdffwfwsfwsfw
         //fwfswwfwfssw
           ////swfwsf
-        return 3&&5 || 2&&4;
+        return 3&&5;
 
     }

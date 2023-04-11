@@ -24,6 +24,53 @@ enum VisitRetType {
     None,
 }
 
+// let func_data = self.program.func_mut(*function);
+// let ret = func_data.dfg_mut().new_value().ret(Some(value));
+// func_data
+//     .layout_mut()
+//     .bb_mut(*bb)
+//     .insts_mut()
+//     .push_key_back(ret)
+//     .unwrap();
+
+macro_rules! funcdata {
+    ($self:ident,$func:expr) => {
+        $self.program.func_mut($func)
+    };
+}
+
+// func_data
+//             .dfg_mut()
+//             .new_bb()
+//             .basic_block(Some("%entry".into()));
+
+macro_rules! basicblock {
+    ($func:ident,$bbname:expr) => {
+        $func.dfg_mut().new_bb().basic_block(Some($bbname))
+    };
+}
+
+// func_data.layout_mut().bbs_mut().extend([entry_bb]);
+macro_rules! insertbb {
+    ($func:ident,$bb:expr) => {
+        $func.layout_mut().bbs_mut().extend($bb)
+    };
+}
+
+macro_rules! value {
+    ($func:ident,$op:ident,$($value:expr),+)=>{
+        $func.dfg_mut().new_value().$op($($value),+)
+    };
+}
+
+// func_data.layout_mut().bb_mut(*bb).insts_mut().extend([ret]);
+
+macro_rules! insertvalue {
+    ($func:ident,$bb:expr,$values:expr) => {
+        $func.layout_mut().bb_mut($bb).insts_mut().extend($values)
+    };
+}
+
 impl ast::Visitor<VisitRetType> for Parser {
     fn visit_comp_unit(&mut self, comp_unit: &ast::CompUnit) -> VisitRetType {
         match comp_unit {
@@ -48,13 +95,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                 Type::get_unit(),
             )),
         };
-        let func_data = self.program.func_mut(function);
-        // insert the %entry block for function
-        let entry_bb = func_data
-            .dfg_mut()
-            .new_bb()
-            .basic_block(Some("%entry".into()));
-        func_data.layout_mut().bbs_mut().extend([entry_bb]);
+        let func_data = funcdata!(self, function);
+        let entry_bb = basicblock!(func_data, "%entry".into());
+        insertbb!(func_data, [entry_bb]);
         self.visit_block(&func_def.block, &function, &entry_bb);
         VisitRetType::None
     }
@@ -109,28 +152,18 @@ impl ast::Visitor<VisitRetType> for Parser {
         match ret_stmt {
             RetStmt::Exp(exp) => match self.visit_exp(exp, function, bb) {
                 VisitRetType::Value(value) => {
-                    let func_data = self.program.func_mut(*function);
-                    let ret = func_data.dfg_mut().new_value().ret(Some(value));
-                    func_data
-                        .layout_mut()
-                        .bb_mut(*bb)
-                        .insts_mut()
-                        .push_key_back(ret)
-                        .unwrap();
+                    let func_data = funcdata!(self, *function);
+                    let ret = value!(func_data, ret, Some(value));
+                    insertvalue!(func_data, *bb, [ret]);
                 }
                 VisitRetType::None => {
                     panic!("Exp can not be this type")
                 }
             },
             RetStmt::Void => {
-                let func_data = self.program.func_mut(*function);
-                let ret = func_data.dfg_mut().new_value().ret(None);
-                func_data
-                    .layout_mut()
-                    .bb_mut(*bb)
-                    .insts_mut()
-                    .push_key_back(ret)
-                    .unwrap();
+                let func_data = funcdata!(self, *function);
+                let ret = value!(func_data, ret, None);
+                insertvalue!(func_data, *bb, [ret]);
             }
         }
         VisitRetType::None
@@ -156,23 +189,15 @@ impl ast::Visitor<VisitRetType> for Parser {
                     self.visit_l_or_exp(l_or_exp, function, bb),
                     self.visit_l_and_exp(l_and_exp, function, bb),
                 ) {
-                    let func_data = self.program.func_mut(*function);
-                    let or =
-                        func_data
-                            .dfg_mut()
-                            .new_value()
-                            .binary(BinaryOp::Or, l_value, r_value);
-                    let zero_value = func_data.dfg_mut().new_value().integer(0);
-                    let eq = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, or, zero_value);
-                    func_data
-                        .layout_mut()
-                        .bb_mut(*bb)
-                        .insts_mut()
-                        .extend([or,eq]);
+                    let func_data = funcdata!(self, *function);
+                    let or = value!(func_data, binary, BinaryOp::Or, l_value, r_value);
+                    let zero_value = value!(func_data, integer, 0);
+                    let eq = value!(func_data, binary, BinaryOp::NotEq, or, zero_value);
+                    insertvalue!(func_data, *bb, [or, eq]);
                     VisitRetType::Value(eq)
                 } else {
                     panic!()
-                } 
+                }
             }
         }
     }
@@ -189,21 +214,17 @@ impl ast::Visitor<VisitRetType> for Parser {
                     self.visit_l_and_exp(l_and_exp, function, bb),
                     self.visit_eq_exp(eq_exp, function, bb),
                 ) {
-                    let func_data = self.program.func_mut(*function);
-                    let zero_value = func_data.dfg_mut().new_value().integer(0);
-                    let neq_l = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, l_value, zero_value);
-                    let neq_r = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, r_value, zero_value);
-                    let and = func_data.dfg_mut().new_value().binary(BinaryOp::And, neq_l, neq_r);
-                    let neq = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, and, zero_value);
-                    func_data
-                        .layout_mut()
-                        .bb_mut(*bb)
-                        .insts_mut()
-                        .extend([neq_l,neq_r,and,neq]);
+                    let func_data = funcdata!(self, *function);
+                    let zero_value = value!(func_data, integer, 0);
+                    let neq_l = value!(func_data, binary, BinaryOp::NotEq, l_value, zero_value);
+                    let neq_r = value!(func_data, binary, BinaryOp::NotEq, r_value, zero_value);
+                    let and = value!(func_data, binary, BinaryOp::And, neq_l, neq_r);
+                    let neq = value!(func_data, binary, BinaryOp::NotEq, and, zero_value);
+                    insertvalue!(func_data, *bb, [neq_l, neq_r, and, neq]);
                     VisitRetType::Value(neq)
                 } else {
                     panic!()
-                }               
+                }
             }
         }
     }
@@ -221,18 +242,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_eq_exp(eq_exp, function, bb),
                         self.visit_rel_exp(rel_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let eq =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Eq, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(eq)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let eq = value!(func_data, binary, BinaryOp::Eq, l_value, r_value);
+                        insertvalue!(func_data, *bb, [eq]);
                         VisitRetType::Value(eq)
                     } else {
                         panic!()
@@ -243,18 +255,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_eq_exp(eq_exp, function, bb),
                         self.visit_rel_exp(rel_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let not_eq = func_data.dfg_mut().new_value().binary(
-                            BinaryOp::NotEq,
-                            l_value,
-                            r_value,
-                        );
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(not_eq)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let not_eq = value!(func_data, binary, BinaryOp::NotEq, l_value, r_value);
+                        insertvalue!(func_data, *bb, [not_eq]);
                         VisitRetType::Value(not_eq)
                     } else {
                         panic!()
@@ -280,18 +283,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_rel_exp(rel_exp, function, bb),
                         self.visit_add_exp(add_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let lt =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Lt, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(lt)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let lt = value!(func_data, binary, BinaryOp::Lt, l_value, r_value);
+                        insertvalue!(func_data, *bb, [lt]);
                         VisitRetType::Value(lt)
                     } else {
                         panic!()
@@ -302,18 +296,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_rel_exp(rel_exp, function, bb),
                         self.visit_add_exp(add_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let mt =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Gt, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(mt)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let mt = value!(func_data, binary, BinaryOp::Gt, l_value, r_value);
+                        insertvalue!(func_data, *bb, [mt]);
                         VisitRetType::Value(mt)
                     } else {
                         panic!()
@@ -324,18 +309,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_rel_exp(rel_exp, function, bb),
                         self.visit_add_exp(add_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let le =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Le, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(le)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let le = value!(func_data, binary, BinaryOp::Le, l_value, r_value);
+                        insertvalue!(func_data, *bb, [le]);
                         VisitRetType::Value(le)
                     } else {
                         panic!()
@@ -346,18 +322,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_rel_exp(rel_exp, function, bb),
                         self.visit_add_exp(add_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let me =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Ge, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(me)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let me = value!(func_data, binary, BinaryOp::Ge, l_value, r_value);
+                        insertvalue!(func_data, *bb, [me]);
                         VisitRetType::Value(me)
                     } else {
                         panic!()
@@ -383,18 +350,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_add_exp(add_exp, function, bb),
                         self.visit_mul_exp(mul_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let add =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Add, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(add)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let add = value!(func_data, binary, BinaryOp::Add, l_value, r_value);
+                        insertvalue!(func_data, *bb, [add]);
                         VisitRetType::Value(add)
                     } else {
                         panic!()
@@ -405,18 +363,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_add_exp(add_exp, function, bb),
                         self.visit_mul_exp(mul_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let sub =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Sub, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(sub)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let sub = value!(func_data, binary, BinaryOp::Sub, l_value, r_value);
+                        insertvalue!(func_data, *bb, [sub]);
                         VisitRetType::Value(sub)
                     } else {
                         panic!()
@@ -442,18 +391,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_mul_exp(mul_exp, function, bb),
                         self.visit_unary_exp(unary_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let mul =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Mul, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(mul)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let mul = value!(func_data, binary, BinaryOp::Mul, l_value, r_value);
+                        insertvalue!(func_data, *bb, [mul]);
                         VisitRetType::Value(mul)
                     } else {
                         panic!()
@@ -464,18 +404,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_mul_exp(mul_exp, function, bb),
                         self.visit_unary_exp(unary_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let div =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Div, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(div)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let div = value!(func_data, binary, BinaryOp::Div, l_value, r_value);
+                        insertvalue!(func_data, *bb, [div]);
                         VisitRetType::Value(div)
                     } else {
                         panic!()
@@ -486,18 +417,9 @@ impl ast::Visitor<VisitRetType> for Parser {
                         self.visit_mul_exp(mul_exp, function, bb),
                         self.visit_unary_exp(unary_exp, function, bb),
                     ) {
-                        let func_data = self.program.func_mut(*function);
-                        let mod_value =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Mod, l_value, r_value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(mod_value)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let mod_value = value!(func_data, binary, BinaryOp::Mod, l_value, r_value);
+                        insertvalue!(func_data, *bb, [mod_value]);
                         VisitRetType::Value(mod_value)
                     } else {
                         panic!()
@@ -524,19 +446,10 @@ impl ast::Visitor<VisitRetType> for Parser {
                     if let VisitRetType::Value(value) =
                         self.visit_unary_exp(unary_exp, function, bb)
                     {
-                        let func_data = self.program.func_mut(*function);
-                        let zero_value = func_data.dfg_mut().new_value().integer(0);
-                        let sub = func_data.dfg_mut().new_value().binary(
-                            BinaryOp::Sub,
-                            zero_value,
-                            value,
-                        );
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(sub)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let zero_value = value!(func_data, integer, 0);
+                        let sub = value!(func_data, binary, BinaryOp::Sub, zero_value, value);
+                        insertvalue!(func_data, *bb, [sub]);
                         VisitRetType::Value(sub)
                     } else {
                         panic!()
@@ -546,19 +459,10 @@ impl ast::Visitor<VisitRetType> for Parser {
                     if let VisitRetType::Value(value) =
                         self.visit_unary_exp(unary_exp, function, bb)
                     {
-                        let func_data = self.program.func_mut(*function);
-                        let zero_value = func_data.dfg_mut().new_value().integer(0);
-                        let eq =
-                            func_data
-                                .dfg_mut()
-                                .new_value()
-                                .binary(BinaryOp::Eq, zero_value, value);
-                        func_data
-                            .layout_mut()
-                            .bb_mut(*bb)
-                            .insts_mut()
-                            .push_key_back(eq)
-                            .unwrap();
+                        let func_data = funcdata!(self, *function);
+                        let zero_value = value!(func_data, integer, 0);
+                        let eq = value!(func_data, binary, BinaryOp::Eq, zero_value, value);
+                        insertvalue!(func_data, *bb, [eq]);
                         VisitRetType::Value(eq)
                     } else {
                         panic!()
@@ -580,8 +484,8 @@ impl ast::Visitor<VisitRetType> for Parser {
             PrimaryExp::Exp(exp) => self.visit_exp(exp, function, bb),
             PrimaryExp::Number(number) => match number {
                 Number::IntConst(int_const) => {
-                    let func_data = self.program.func_mut(*function);
-                    let number_value = func_data.dfg_mut().new_value().integer(*int_const);
+                    let func_data = funcdata!(self, *function);
+                    let number_value = value!(func_data, integer, *int_const);
                     VisitRetType::Value(number_value)
                 }
             },
