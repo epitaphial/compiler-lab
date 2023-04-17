@@ -1,6 +1,7 @@
 mod asmgen;
 mod ast;
 mod parser;
+mod asm;
 
 use std::{env, error::Error, fs};
 

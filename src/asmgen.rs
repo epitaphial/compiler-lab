@@ -1,89 +1,85 @@
-use std::{fs::File, io::Write};
+use std::{collections::HashMap, fs::File, io::Write};
 
 use koopa::ir::{
     entities::{BasicBlockData, ValueData},
-    FunctionData, Program, ValueKind,
+    layout::BasicBlockNode,
+    FunctionData, Program, Type, TypeKind, Value, ValueKind,
 };
 
-mod asm {
-    #[derive(Debug)]
-    pub struct Program {
-        pub sections: Vec<Section>,
-        // other symbols...
-    }
+use crate::asm::{self, AsmBasicBlock, AsmFunction, AsmInstruction, AsmProgram, BlockName};
 
-    #[derive(Debug)]
-    pub enum Section {
-        TextSection(Vec<Function>),
-    }
+//static mut VALUE_REG_MAP:HashMap<Value,String> = HashMap::new();
 
-    #[derive(Debug)]
-    pub struct Function {
-        pub func_name: String,
-        pub blocks: Vec<BasicBlock>,
+trait AsmGenerator {
+    fn generate_program(&self) -> AsmProgram {
+        panic!()
     }
-
-    #[derive(Debug)]
-    pub struct BasicBlock {
-        pub block_name:Option<String>,
-        pub insts:Vec<Instruction>,
+    fn generate_function(&self) -> AsmFunction {
+        panic!()
     }
-
-    pub type Instruction = Option<String>;
+    fn generate_basic_block(
+        &self,
+        func_data: &FunctionData,
+        bb_node: &BasicBlockNode,
+    ) -> AsmBasicBlock {
+        panic!()
+    }
+    fn generate_instruction(&self) -> AsmInstruction {
+        panic!()
+    }
 }
 
-trait AsmGenerator<T> {
-    fn generate_program(&self,func_data:Option<&FunctionData>) -> T;
-}
-
-impl AsmGenerator<asm::Program> for Program {
-    fn generate_program(&self,_:Option<&FunctionData>) -> asm::Program {
-        let mut prog_asm = asm::Program {
-            sections: Vec::new(),
-        };
-        // deal with text section
-        let mut funcs = Vec::new();
+impl AsmGenerator for Program {
+    fn generate_program(&self) -> AsmProgram {
+        let mut asm_prog = AsmProgram::new();
         for (_, func_data) in self.funcs() {
-            funcs.push(func_data.generate_program(None));
+            asm_prog.push_func(func_data.generate_function());
         }
-        let text_section = asm::Section::TextSection(funcs);
-        //deal with data and more section...unimplemented
-        // todo
-        prog_asm.sections.extend([text_section]);
-        prog_asm
+        asm_prog
     }
 }
 
-impl AsmGenerator<asm::Function> for FunctionData {
-    fn generate_program(&self,_:Option<&FunctionData>) -> asm::Function {
-        let mut func = asm::Function {
-            func_name: self.name().into(),
-            blocks: Vec::new(),
-        };
-        for (_,bb_data) in self.dfg().bbs(){
-            func.blocks.push(bb_data.generate_program(Some(self)));
+impl AsmGenerator for FunctionData {
+    fn generate_function(&self) -> AsmFunction {
+        let mut asm_func = AsmFunction::new(self.name().to_string());
+        let mut sp_size = 0;
+        for (bb, bb_node) in self.layout().bbs() {
+            for (value, _) in bb_node.insts() {
+                let value_data = self.dfg().value(*value);
+                match value_data.ty().kind() {
+                    TypeKind::Int32=>{sp_size+=4}
+                    TypeKind::Unit=>{}
+                    _ => {}
+                }
+            }
+            let block_data = self.dfg().bb(*bb);
+            asm_func.push_bb(block_data.generate_basic_block(self, bb_node));
         }
-        func
+        asm_func
     }
 }
 
-impl AsmGenerator<asm::BasicBlock> for BasicBlockData {
-    fn generate_program(&self,func_data:Option<&FunctionData>) -> asm::BasicBlock {
-        let mut block = asm::BasicBlock{
-            block_name:self.name().clone(),
-            insts:Vec::new(),
-        };
-        for (_,value_data) in func_data.unwrap().dfg().values(){
-            block.insts.push(value_data.generate_program(func_data))
+impl AsmGenerator for BasicBlockData {
+    fn generate_basic_block(
+        &self,
+        func_data: &FunctionData,
+        bb_node: &BasicBlockNode,
+    ) -> AsmBasicBlock {
+        let mut asm_bb = AsmBasicBlock::new(self.name().clone().unwrap().to_string());
+        for (value, _) in bb_node.insts() {
+            let asm_value = func_data.dfg().value(*value).generate_instruction();
+            asm_bb.push_inst(asm_value);
         }
-        block
+        asm_bb
     }
 }
 
-impl AsmGenerator<asm::Instruction> for ValueData {
-    fn generate_program(&self,func_data:Option<&FunctionData>) -> asm::Instruction {
-        println!("{:#?}",self);
-        self.name().clone()
+impl AsmGenerator for ValueData {
+    fn generate_instruction(&self) -> AsmInstruction {
+        let mut asm_inst = AsmInstruction::new();
+        //asm_inst.inst_name = Some(format!("{:#?}",self));
+        //println!("{:#?}",self);
+        asm_inst
     }
 }
 
@@ -113,7 +109,7 @@ impl AsmGenerator<asm::Instruction> for ValueData {
 // }
 
 pub fn gen_asm(program: &Program, _output_name: &String) {
-    let _asm = program.generate_program(None);
-    //println!("{:#?}", asm);
+    let asm = program.generate_program();
+    println!("{:#?}", asm);
     //let mut output_file = File::create(output_name).unwrap();
 }
