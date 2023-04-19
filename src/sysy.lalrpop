@@ -9,45 +9,150 @@ match {
     _
 }
 
-pub CompUnit:ast::CompUnit = {
-    FuncDef => ast::CompUnit::FuncDef(<>),
+// CompUnit ::= [CompUnit] (Decl | FuncDef);
+pub CompUnit:Box<ast::CompUnit> = {
+    CompUnit? Decl => Box::new(ast::CompUnit::Decl(<>)),
+    CompUnit? FuncDef => Box::new(ast::CompUnit::FuncDef(<>)),
 };
 
+// Decl ::= ConstDecl | VarDecl;
+Decl:ast::Decl = {
+    ConstDecl => ast::Decl::ConstDecl(<>),
+    VarDecl => ast::Decl::VarDecl(<>),
+};
+
+// ConstDecl ::= "const" BType ConstDef {"," ConstDef} ";";
+ConstDecl:ast::ConstDecl = {
+    "const" <const_type:Type> <const_def:ConstDef> <mut const_defs:("," <ConstDef> )*> ";" =>{
+        const_defs.push(const_def);
+        ast::ConstDecl{
+            const_type,
+            const_defs,
+        }
+    }
+};
+
+
+// ConstDef ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal;
+ConstDef:ast::ConstDef = {
+    <const_ident:Ident> <const_exps:("[" <ConstExp> "]")*> "=" <const_init_val:ConstInitVal> =>{
+        ast::ConstDef{
+            const_ident,
+            const_exps,
+            const_init_val,
+        }
+    }
+};
+
+// ConstInitVal ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}";
+ConstInitVal:ast::ConstInitVal = {
+    ConstExp => ast::ConstInitVal::ConstExp(<>),
+    "{" <mut const_init_val_tuple:(ConstInitVal ("," <ConstInitVal>)*)?> "}" => {
+        if let Some(const_init_val_tuple) = const_init_val_tuple{
+            let (const_init_val,mut const_init_vals) = const_init_val_tuple;
+            const_init_vals.push(const_init_val);
+            ast::ConstInitVal::ConstInitVal(Some(const_init_vals))
+        }else{
+            ast::ConstInitVal::ConstInitVal(None)
+        }  
+    }
+};
+
+// VarDecl ::= BType VarDef {"," VarDef} ";";
+VarDecl:ast::VarDecl = {
+    <var_type:Type> <var_def:VarDef> <mut var_defs:("," <VarDef>)*> ";"=>{
+        var_defs.push(var_def);
+        ast::VarDecl{
+            var_type,
+            var_defs,
+        }
+    }
+};
+
+// VarDef ::= IDENT {"[" ConstExp "]"}
+// | IDENT {"[" ConstExp "]"} "=" InitVal;
+VarDef:ast::VarDef = {
+    <ident:Ident> <const_exps:("[" <ConstExp> "]")*> =>{
+        ast::VarDef::VarDef(ident,const_exps)
+    },
+    <ident:Ident> <const_exps:("[" <ConstExp> "]")*> "=" <init_val:InitVal> =>{
+        ast::VarDef::InitVal(ident,const_exps,init_val)
+    },
+};
+
+// InitVal ::= Exp | "{" [InitVal {"," InitVal}] "}";
+InitVal:ast::InitVal = {
+    Exp => ast::InitVal::Exp(<>),
+    "{" <mut init_val_tuple:(InitVal ("," <InitVal>)*)?> "}" => {
+        if let Some(init_val_tuple) = init_val_tuple{
+            let (init_val,mut init_vals) = init_val_tuple;
+            init_vals.push(init_val);
+            ast::InitVal::InitVal(Some(init_vals))
+        }else{
+            ast::InitVal::InitVal(None)
+        }
+    }
+};
+
+// Expect: FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
+// Now: FuncDef ::= FuncType IDENT "()" Block;
 FuncDef:ast::FuncDef = {
-    <func_type:FuncType> <func_ident:Ident> "(" ")" <block:Block> => ast::FuncDef{<>},
+    <func_type:Type> <func_ident:Ident> "(" ")" <block:Block> => ast::FuncDef{<>},
 };
 
-
-FuncType:ast::FuncType = {
-    "int" => ast::FuncType::TypeInt,
-    "void" => ast::FuncType::TypeVoid,
+// FuncType ::= "void" | "int";
+Type:ast::Type = {
+    "int" => ast::Type::Int,
+    "void" => ast::Type::Void,
 };  
 
+// Block ::= "{" {BlockItem} "}";
 Block:ast::Block = {
-    "{" <BlockItems> "}" => ast::Block::BlockItems(<>),
-    "{" "}" => ast::Block::Void,
+    "{" <block_items:BlockItem*> "}" => ast::Block{<>},
 };
 
-BlockItems:ast::BlockItems = {
-    <mut block_items:BlockItems> <block_item:BlockItem> => {
-        block_items.push(block_item);
-        block_items
-    },
-    BlockItem => vec![<>],
-};
-
+// BlockItem ::= Decl | Stmt;
 BlockItem:ast::BlockItem = {
+    Decl => ast::BlockItem::Decl(<>),
     Stmt => ast::BlockItem::Stmt(<>),
 };
 
+// Expect: Stmt ::= LVal "=" Exp ";"
+// | [Exp] ";"
+// | Block
+// | "if" "(" Exp ")" Stmt ["else" Stmt]
+// | "while" "(" Exp ")" Stmt
+// | "break" ";"
+// | "continue" ";"
+// | RetStmt;
+// Now: Stmt ::= RetStmt
+// | AssignStmt;
 Stmt:ast::Stmt = {
     RetStmt => ast::Stmt::RetStmt(<>),
+    AssignStmt => ast::Stmt::AssignStmt(<>),
 };
 
-// RetStmt ::= "return" Exp ";" | "return" ";";
+// RetStmt ::= "return" [Exp] ";";
 RetStmt:ast::RetStmt = {
-    "return" <Exp> ";" => ast::RetStmt::Exp(<>),
-    "return" ";" => ast::RetStmt::Void,
+    "return" <exp:Exp?> ";" => ast::RetStmt{<>},
+};
+
+// AssignStmt ::= LVal "=" Exp ";"
+AssignStmt:ast::AssignStmt = {
+    <l_val:LVal> "=" <exp:Exp> ";" => ast::AssignStmt{<>},
+};
+
+// LVal ::= IDENT {"[" Exp "]"};
+LVal:ast::LVal = {
+    <ident:Ident> <exps:("[" <Exp> "]")*> => {
+        println!("{:#?}",exps);
+        ast::LVal{<>}
+    }
+};
+
+// ConstExp ::= Exp;
+ConstExp:ast::ConstExp = {
+    <exp:Exp> => ast::ConstExp{<>},
 };
 
 // Exp ::= LOrExp;
@@ -135,15 +240,15 @@ UnaryOp:ast::Operator = {
     "!" => ast::Operator::Not,
 };
 
-// Expect: PrimaryExp ::= "(" Exp ")" | LVal | Number;
-// Now: PrimaryExp ::= "(" Exp ")" | Number;
+// PrimaryExp ::= "(" Exp ")" | LVal | Number;
 PrimaryExp:ast::PrimaryExp = {
     "(" <Exp> ")" => ast::PrimaryExp::Exp(<>),
+    LVal => ast::PrimaryExp::LVal(<>),
     Number => ast::PrimaryExp::Number(<>),
 };
 
 
-Ident:String = {
+Ident:ast::Ident = {
     r"[a-zA-Z_][a-zA-Z_0-9]*" => <>.to_string(),
 };
 

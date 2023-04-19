@@ -2,6 +2,8 @@ use std::fmt;
 
 use koopa::ir::{BasicBlock, Function};
 
+pub type Ident = String;
+
 #[derive(Debug)]
 pub enum Operator {
     Not,
@@ -23,91 +25,91 @@ pub enum Operator {
     MoreOrEqualThan,
 }
 
-// Expect: CompUnit ::= [CompUnit] (Decl | FuncDef);
-// Now: CompUnit ::= FuncDef;
+// CompUnit ::= [CompUnit] (Decl | FuncDef);
+#[derive(Debug)]
 pub enum CompUnit {
-    FuncDef(FuncDef),
+    Decl(Option<Box<CompUnit>>, Decl),
+    FuncDef(Option<Box<CompUnit>>, FuncDef),
 }
 
-impl fmt::Debug for CompUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let CompUnit::FuncDef(func_def) = self;
-        write!(f, "CompUnit{{\n{:#?}\n}}", func_def)
-    }
+// Decl ::= ConstDecl | VarDecl;
+#[derive(Debug)]
+pub enum Decl {
+    ConstDecl(ConstDecl),
+    VarDecl(VarDecl),
+}
+
+// ConstDecl ::= "const" BType ConstDef {"," ConstDef} ";";
+#[derive(Debug)]
+pub struct ConstDecl {
+    pub const_type: Type,
+    pub const_defs: Vec<ConstDef>,
+}
+
+// ConstDef ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal;
+#[derive(Debug)]
+pub struct ConstDef {
+    pub const_ident: Ident,
+    pub const_exps: Vec<ConstExp>,
+    pub const_init_val: ConstInitVal,
+}
+
+// ConstInitVal ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}";
+#[derive(Debug)]
+pub enum ConstInitVal {
+    ConstExp(ConstExp),
+    ConstInitVal(Option<Vec<ConstInitVal>>),
+}
+
+// VarDecl ::= BType VarDef {"," VarDef} ";";
+#[derive(Debug)]
+pub struct VarDecl {
+    pub var_type: Type,
+    pub var_defs: Vec<VarDef>,
+}
+
+// VarDef ::= IDENT {"[" ConstExp "]"}
+// | IDENT {"[" ConstExp "]"} "=" InitVal;
+#[derive(Debug)]
+pub enum VarDef {
+    VarDef(Ident, Vec<ConstExp>),
+    InitVal(Ident, Vec<ConstExp>, InitVal),
+}
+
+// InitVal ::= Exp | "{" [InitVal {"," InitVal}] "}";
+#[derive(Debug)]
+pub enum InitVal {
+    Exp(Exp),
+    InitVal(Option<Vec<InitVal>>),
 }
 
 // Expect: FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
 // Now: FuncDef ::= FuncType IDENT "()" Block;
+#[derive(Debug)]
 pub struct FuncDef {
-    pub func_type: FuncType,
-    pub func_ident: String,
+    pub func_type: Type,
+    pub func_ident: Ident,
     pub block: Block,
 }
 
-impl fmt::Debug for FuncDef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "FuncDef{{\nfunc_type:{:#?}\nfunc_ident:\"{}\"\nblock:{:#?}\n}}",
-            self.func_type, self.func_ident, self.block
-        )
-    }
-}
-
-// FuncType ::= "void" | "int";
-pub enum FuncType {
-    TypeVoid,
-    TypeInt,
-}
-
-impl fmt::Debug for FuncType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FuncType::TypeVoid => {
-                write!(f, "FuncType{{\nVoid\n}}\n")
-            }
-            FuncType::TypeInt => {
-                write!(f, "FuncType{{\nInt\n}}\n")
-            }
-        }
-    }
-}
-
-// Block ::= "{" BlockItems "}" | "{" "}";
-pub enum Block {
-    BlockItems(BlockItems),
+// Type ::= "void" | "int";
+#[derive(Debug)]
+pub enum Type {
     Void,
+    Int,
 }
 
-impl fmt::Debug for Block {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Block::BlockItems(block_items) => {
-                write!(f, "BlockItems{{\n{:#?}\n}}", block_items)
-            }
-            Block::Void => {
-                write!(f, "BlockItems{{\nVoidBlock}}\n")
-            }
-        }
-    }
+// Block ::= "{" {BlockItem} "}";
+#[derive(Debug)]
+pub struct Block {
+    pub block_items: Vec<BlockItem>,
 }
 
-pub type BlockItems = Vec<BlockItem>;
-
-// Expect: BlockItem ::= Decl | Stmt;
-// Now: BlockItem ::= Stmt;
+// BlockItem ::= Decl | Stmt;
+#[derive(Debug)]
 pub enum BlockItem {
+    Decl(Decl),
     Stmt(Stmt),
-}
-
-impl fmt::Debug for BlockItem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BlockItem::Stmt(stmt) => {
-                write!(f, "BlockItem{{\n{:#?}\n}}", stmt)
-            }
-        }
-    }
 }
 
 // Expect: Stmt ::= LVal "=" Exp ";"
@@ -118,38 +120,38 @@ impl fmt::Debug for BlockItem {
 // | "break" ";"
 // | "continue" ";"
 // | RetStmt;
-// Now: Stmt ::= RetStmt;
+// Now: Stmt ::= RetStmt
+// | AssignStmt;
+#[derive(Debug)]
 pub enum Stmt {
     RetStmt(RetStmt),
+    AssignStmt(AssignStmt),
 }
 
-impl fmt::Debug for Stmt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Stmt::RetStmt(ret_stmt) => {
-                write!(f, "Stmt{{\n{:#?}}}\n", ret_stmt)
-            }
-        }
-    }
+// RetStmt ::= "return" [Exp] ";";
+#[derive(Debug)]
+pub struct RetStmt {
+    pub exp: Option<Exp>,
 }
 
-// RetStmt ::= "return" Exp ";" | "return" ";";
-pub enum RetStmt {
-    Exp(Exp),
-    Void,
+// AssignStmt ::= LVal "=" Exp ";"
+#[derive(Debug)]
+pub struct AssignStmt {
+    pub l_val: LVal,
+    pub exp: Exp,
 }
 
-impl fmt::Debug for RetStmt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RetStmt::Exp(exp) => {
-                write!(f, "RetStmt{{\n{:#?}}}\n", exp)
-            }
-            RetStmt::Void => {
-                write!(f, "RetStmt{{\n}}\n")
-            }
-        }
-    }
+// LVal ::= IDENT {"[" Exp "]"};
+#[derive(Debug)]
+pub struct LVal {
+    pub ident: Ident,
+    pub exps: Vec<Exp>,
+}
+
+// ConstExp ::= Exp;
+#[derive(Debug)]
+pub struct ConstExp {
+    pub exp: Exp,
 }
 
 // Exp ::= LOrExp;
@@ -202,60 +204,37 @@ pub enum MulExp {
 
 // Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
 // Now: UnaryExp    ::= PrimaryExp | UnaryOp UnaryExp;
+#[derive(Debug)]
 pub enum UnaryExp {
     PrimaryExp(PrimaryExp),
     UnaryOp(Operator, Box<UnaryExp>),
 }
 
-impl fmt::Debug for UnaryExp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            UnaryExp::PrimaryExp(primary_exp) => {
-                write!(f, "UnaryExp{{\n{:#?}}}\n", primary_exp)
-            }
-            UnaryExp::UnaryOp(unary_op, unary_exp) => {
-                write!(f, "UnaryExp{{\n{:#?}{:#?}}}\n", unary_op, unary_exp)
-            }
-        }
-    }
-}
-
-// Expect: PrimaryExp ::= "(" Exp ")" | LVal | Number;
-// Now: PrimaryExp ::= "(" Exp ")" | Number;
+// PrimaryExp ::= "(" Exp ")" | LVal | Number;
+#[derive(Debug)]
 pub enum PrimaryExp {
     Exp(Exp),
+    LVal(LVal),
     Number(Number),
 }
 
-impl fmt::Debug for PrimaryExp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PrimaryExp::Exp(exp) => {
-                write!(f, "PrimaryExp{{\n{:#?}\n}}\n", exp)
-            }
-            PrimaryExp::Number(number) => {
-                write!(f, "PrimaryExp{{\n{:#?}\n}}\n", number)
-            }
-        }
-    }
-}
-
+#[derive(Debug)]
 pub enum Number {
     IntConst(i32),
 }
 
-impl fmt::Debug for Number {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Number::IntConst(int_const) => {
-                write!(f, "Number({})\n", int_const)
-            }
-        }
-    }
-}
-
-pub trait Visitor<T> {
+pub trait Visitor<T, V> {
     fn visit_comp_unit(&mut self, comp_unit: &CompUnit) -> T;
+    fn visit_decl(&mut self, decl: &Decl, v: V) -> T;
+    fn visit_const_decl(&mut self, const_decl: &ConstDecl, v: V) -> T;
+    fn visit_const_def(&mut self, const_def: &ConstDef, v: V) -> T;
+    fn visit_const_init_val(&mut self, cons_init_val: &ConstInitVal, v: V) -> T;
+
+    fn visit_var_decl(&mut self, var_decl: &VarDecl, v: V) -> T;
+
+    fn visit_var_def(&mut self, var_def: &VarDef, v: V) -> T;
+    fn visit_init_val(&mut self, init_val: &InitVal, v: V) -> T;
+
     fn visit_func_def(&mut self, func_def: &FuncDef) -> T;
     fn visit_block(&mut self, block: &Block, function: &Function, bb: &BasicBlock) -> T;
     fn visit_block_item(
@@ -266,18 +245,16 @@ pub trait Visitor<T> {
     ) -> T;
     fn visit_stmt(&mut self, stmt: &Stmt, function: &Function, bb: &BasicBlock) -> T;
     fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_exp(&mut self, exp: &Exp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_l_or_exp(&mut self, l_or_exp: &LOrExp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_l_and_exp(&mut self, l_and_exp: &LAndExp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_eq_exp(&mut self, eq_exp: &EqExp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_rel_exp(&mut self, rel_exp: &RelExp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_add_exp(&mut self, add_exp: &AddExp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_mul_exp(&mut self, mul_exp: &MulExp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_unary_exp(&mut self, unary_exp: &UnaryExp, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_primary_exp(
-        &mut self,
-        primary_exp: &PrimaryExp,
-        function: &Function,
-        bb: &BasicBlock,
-    ) -> T;
+    fn visit_ass_stmt(&mut self, ass_stmt: &AssignStmt, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_l_val(&mut self, l_val: &LVal, v: V) -> T;
+    fn visit_const_exp(&mut self, const_exp: &ConstExp, v: V) -> T;
+    fn visit_exp(&mut self, exp: &Exp, v: V) -> T;
+    fn visit_l_or_exp(&mut self, l_or_exp: &LOrExp, v: V) -> T;
+    fn visit_l_and_exp(&mut self, l_and_exp: &LAndExp, v: V) -> T;
+    fn visit_eq_exp(&mut self, eq_exp: &EqExp, v: V) -> T;
+    fn visit_rel_exp(&mut self, rel_exp: &RelExp, v: V) -> T;
+    fn visit_add_exp(&mut self, add_exp: &AddExp, v: V) -> T;
+    fn visit_mul_exp(&mut self, mul_exp: &MulExp, v: V) -> T;
+    fn visit_unary_exp(&mut self, unary_exp: &UnaryExp, v: V) -> T;
+    fn visit_primary_exp(&mut self, primary_exp: &PrimaryExp, v: V) -> T;
 }
