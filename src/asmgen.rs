@@ -26,12 +26,7 @@ trait AsmGenerator {
     ) -> AsmBasicBlock {
         panic!()
     }
-    fn generate_instruction(
-        &self,
-        _: &FunctionData,
-        _: &Value,
-        _: &mut Stack,
-    ) -> AsmInstruction {
+    fn generate_instruction(&self, _: &FunctionData, _: &Value, _: &mut Stack) -> AsmInstruction {
         panic!()
     }
     fn get_value(&self, _: &FunctionData, _: &Value, _: &Stack) -> AsmValue {
@@ -69,10 +64,12 @@ impl AsmGenerator for FunctionData {
         }
 
         // Generate function's prologue
-        let mut prologue = AsmInstruction::new();
-        prologue.push_inst(format!("addi sp, sp, -{}", stack.get_stack_size()));
+        if stack.get_stack_size() != 0 {
+            let mut prologue = AsmInstruction::new();
+            prologue.push_inst(format!("addi sp, sp, -{}", stack.get_stack_size()));
+            asm_func.insert_inst("%entry".to_string(), 0, prologue);
+        }
 
-        asm_func.insert_inst("%entry".to_string(), 0, prologue);
         asm_func
     }
 }
@@ -208,5 +205,5 @@ impl AsmGenerator for ValueData {
 pub fn gen_asm(program: &Program, output_name: &String) {
     let asm = program.generate_program();
     let mut output_file = File::create(output_name).unwrap();
-    write!(output_file,"{}",asm.gen_asm()).unwrap();
+    write!(output_file, "{}", asm.gen_asm()).unwrap();
 }

@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, collections::HashSet};
 
 use koopa::{
     back::KoopaGenerator,
@@ -15,6 +15,31 @@ use crate::ast::{
 
 lalrpop_mod!(pub sysy);
 
+// scope design
+/*
+global:[
+    func1:{
+        block1-1:{
+            block1-1-1{
+
+            }
+        }
+    }
+    func2:{
+        block2-1:{
+
+        }
+    }
+    ...
+]
+ */
+
+// struct Block{
+//     symbols:HashSet<String,Value>,
+//     child:Vec<Block>,
+//     parent:&Block,
+// }
+
 pub struct Parser {
     pub program: Program,
 }
@@ -24,9 +49,10 @@ enum VisitRetType {
     None,
 }
 
-enum VisitType <'a>{
+#[derive(Debug,Clone, Copy)]
+enum VisitType {
     Global,
-    Local(&'a Function,&'a BasicBlock),
+    Local(Function, BasicBlock),
 }
 
 macro_rules! funcdata {
@@ -67,13 +93,13 @@ macro_rules! insertvalue {
 
 macro_rules! getvaluedata {
     ($func:ident,$value:expr) => {
-        $func.dfg().value($value)
+        $func.dfg().value($value).clone()
     };
 }
 
 macro_rules! removevalue {
     ($func:ident,$value:expr) => {
-        $func.dfg().remove_value($value)
+        $func.dfg_mut().remove_value($value)
     };
 }
 
@@ -84,7 +110,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                 if let Some(comp_unit) = comp_unit {
                     self.visit_comp_unit(comp_unit);
                 }
-                self.visit_global_decl(decl);
+                self.visit_decl(decl,VisitType::Global);
             }
             ast::CompUnit::FuncDef(comp_unit, func_def) => {
                 if let Some(comp_unit) = comp_unit {
@@ -99,10 +125,10 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_decl(&mut self, decl: &ast::Decl, visit_type: VisitType) -> VisitRetType {
         match decl {
             ast::Decl::ConstDecl(const_decl) => {
-                self.visit_local_const_decl(const_decl, function, bb);
+                self.visit_const_decl(const_decl, visit_type);
             }
             ast::Decl::VarDecl(var_decl) => {
-                self.visit_local_var_decl(var_decl, function, bb);
+                self.visit_var_decl(var_decl, visit_type);
             }
         }
         VisitRetType::None
@@ -114,7 +140,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         visit_type: VisitType,
     ) -> VisitRetType {
         for const_def in &const_decl.const_defs {
-            self.visit_local_const_def(const_def, function, bb);
+            self.visit_const_def(const_def, visit_type);
         }
         VisitRetType::None
     }
@@ -125,7 +151,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         visit_type: VisitType,
     ) -> VisitRetType {
         for const_exp in &const_def.const_exps {
-            self.visit_const_exp(const_exp, function, bb);
+            self.visit_const_exp(const_exp, visit_type);
         }
         VisitRetType::None
     }
@@ -168,18 +194,17 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         let func_data = funcdata!(self, function);
         let entry_bb = basicblock!(func_data, "%entry".into());
         insertbb!(func_data, [entry_bb]);
-        self.visit_block(&func_def.block, &function, &entry_bb);
+        self.visit_block(&func_def.block, VisitType::Local(function, entry_bb));
         VisitRetType::None
     }
 
     fn visit_block(
         &mut self,
         block: &crate::ast::Block,
-        function: &Function,
-        bb: &BasicBlock,
+        visit_type: VisitType
     ) -> VisitRetType {
         for block_item in &block.block_items {
-            self.visit_block_item(block_item, function, bb);
+            self.visit_block_item(block_item, visit_type);
         }
         VisitRetType::None
     }
@@ -187,14 +212,13 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_block_item(
         &mut self,
         block_item: &crate::ast::BlockItem,
-        function: &Function,
-        bb: &BasicBlock,
+        visit_type: VisitType
     ) -> VisitRetType {
         match block_item {
             BlockItem::Stmt(stmt) => {
-                self.visit_stmt(stmt, function, bb);
+                self.visit_stmt(stmt, visit_type);
             }
-            BlockItem::Decl(decl) => {}
+            BlockItem::Decl(_decl) => unimplemented!()
         }
         VisitRetType::None
     }
@@ -202,14 +226,13 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_stmt(
         &mut self,
         stmt: &crate::ast::Stmt,
-        function: &Function,
-        bb: &BasicBlock,
+        visit_type: VisitType
     ) -> VisitRetType {
         match stmt {
             Stmt::RetStmt(ret_stmt) => {
-                self.visit_ret_stmt(ret_stmt, function, bb);
+                self.visit_ret_stmt(ret_stmt, visit_type);
             }
-            Stmt::AssignStmt(ass_stmt) => {}
+            Stmt::AssignStmt(_ass_stmt) => {}
         }
         VisitRetType::None
     }
@@ -217,43 +240,42 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_ret_stmt(
         &mut self,
         ret_stmt: &crate::ast::RetStmt,
-        function: &Function,
-        bb: &BasicBlock,
+        visit_type: VisitType
     ) -> VisitRetType {
-        unimplemented!();
-        // match ret_stmt {
-        //     RetStmt::Exp(exp) => match self.visit_exp(exp, function, bb) {
-        //         VisitRetType::Value(value) => {
-        //             let func_data = funcdata!(self, *function);
-        //             let ret = value!(func_data, ret, Some(value));
-        //             insertvalue!(func_data, *bb, [ret]);
-        //         }
-        //         VisitRetType::None => {
-        //             panic!("Exp can not be this type")
-        //         }
-        //     },
-        //     RetStmt::Void => {
-        //         let func_data = funcdata!(self, *function);
-        //         let ret = value!(func_data, ret, None);
-        //         insertvalue!(func_data, *bb, [ret]);
-        //     }
-        // }
+        match visit_type {
+            VisitType::Global=>panic!("Value can not be {:#?}",visit_type),
+            VisitType::Local(function, bb) =>{
+                if let Some(exp) = &ret_stmt.exp {
+                    match self.visit_exp(exp, visit_type) {
+                        VisitRetType::Value(value) => {
+                            let func_data = funcdata!(self, function);
+                            let ret = value!(func_data, ret, Some(value));
+                            insertvalue!(func_data, bb, [ret]);
+                        }
+                        VisitRetType::None => {
+                            panic!("Return value can not be VisitRetType::None")
+                        }
+                    }
+                }else{
+                    let func_data = funcdata!(self, function);
+                    let ret = value!(func_data, ret, None);
+                    insertvalue!(func_data, bb, [ret]);
+                }
+            }
+        }
         VisitRetType::None
     }
 
     fn visit_ass_stmt(
         &mut self,
         ass_stmt: &ast::AssignStmt,
-        function: &Function,
-        bb: &BasicBlock,
+        visit_type: VisitType
     ) -> VisitRetType {
         unimplemented!();
-        VisitRetType::None
     }
 
     fn visit_l_val(&mut self, l_val: &ast::LVal, visit_type: VisitType) -> VisitRetType {
         unimplemented!();
-        VisitRetType::None
     }
 
     fn visit_const_exp(
@@ -261,200 +283,383 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         const_exp: &ast::ConstExp,
         visit_type: VisitType,
     ) -> VisitRetType {
-        unimplemented!();
+        // should check if it is a const...
+        match visit_type {
+            VisitType::Global=>unimplemented!(),
+            VisitType::Local(function,bb)=>{
+                self.visit_exp(&const_exp.exp, visit_type)
+            }
+        }
     }
 
     fn visit_exp(&mut self, exp: &crate::ast::Exp, visit_type: VisitType) -> VisitRetType {
-        self.visit_l_or_exp(&exp.l_or_exp, function, bb)
+        match visit_type {
+            VisitType::Global=>unimplemented!(),
+            VisitType::Local(function,bb)=>{
+                self.visit_l_or_exp(&exp.l_or_exp, visit_type)
+            }
+        }
     }
 
     fn visit_l_or_exp(&mut self, l_or_exp: &ast::LOrExp, visit_type: VisitType) -> VisitRetType {
-        match l_or_exp {
-            LOrExp::LAndExp(l_and_exp) => self.visit_l_and_exp(l_and_exp, function, bb),
-            LOrExp::BinaryOp(l_or_exp, l_and_exp) => {
-                if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                    self.visit_l_or_exp(l_or_exp, function, bb),
-                    self.visit_l_and_exp(l_and_exp, function, bb),
-                ) {
-                    let func_data = funcdata!(self, *function);
-                    let or = value!(func_data, binary, BinaryOp::Or, l_value, r_value);
-                    let zero_value = value!(func_data, integer, 0);
-                    let eq = value!(func_data, binary, BinaryOp::NotEq, or, zero_value);
-                    insertvalue!(func_data, *bb, [or, eq]);
-                    VisitRetType::Value(eq)
-                } else {
-                    panic!()
+        match visit_type {
+            VisitType::Global=>unimplemented!(),
+            VisitType::Local(function, bb)=>{
+                match l_or_exp {
+                    LOrExp::LAndExp(l_and_exp) => self.visit_l_and_exp(l_and_exp, visit_type),
+                    LOrExp::BinaryOp(l_or_exp, l_and_exp) => {
+                        if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                            self.visit_l_or_exp(l_or_exp, visit_type),
+                            self.visit_l_and_exp(l_and_exp, visit_type),
+                        ) {
+                            let func_data = funcdata!(self, function);
+                            // check if both lval and rval are const
+                            let l_val_data = getvaluedata!(func_data, l_value);
+                            let r_val_data = getvaluedata!(func_data, r_value);
+                            if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                (l_val_data.kind(), r_val_data.kind())
+                            { 
+                                let number_value =
+                                    value!(func_data, integer, (l_num.value() !=0 || r_num.value() !=0) as i32);
+                                removevalue!(func_data, l_value);
+                                removevalue!(func_data, r_value);
+                                VisitRetType::Value(number_value)
+                            } else {
+                                let or = value!(func_data, binary, BinaryOp::Or, l_value, r_value);
+                                let zero_value = value!(func_data, integer, 0);
+                                let eq = value!(func_data, binary, BinaryOp::NotEq, or, zero_value);
+                                insertvalue!(func_data, bb, [or, eq]);
+                                VisitRetType::Value(eq)
+                            }
+                        } else {
+                            panic!("Value can not be {:#?}",visit_type)
+                        }
+                    }
                 }
             }
         }
     }
 
     fn visit_l_and_exp(&mut self, l_and_exp: &ast::LAndExp, visit_type: VisitType) -> VisitRetType {
-        match l_and_exp {
-            LAndExp::EqExp(eq_exp) => self.visit_eq_exp(eq_exp, function, bb),
-            LAndExp::BinaryOp(l_and_exp, eq_exp) => {
-                if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                    self.visit_l_and_exp(l_and_exp, function, bb),
-                    self.visit_eq_exp(eq_exp, function, bb),
-                ) {
-                    let func_data = funcdata!(self, *function);
-                    let zero_value = value!(func_data, integer, 0);
-                    let neq_l = value!(func_data, binary, BinaryOp::NotEq, l_value, zero_value);
-                    let neq_r = value!(func_data, binary, BinaryOp::NotEq, r_value, zero_value);
-                    let and = value!(func_data, binary, BinaryOp::And, neq_l, neq_r);
-                    let neq = value!(func_data, binary, BinaryOp::NotEq, and, zero_value);
-                    insertvalue!(func_data, *bb, [neq_l, neq_r, and, neq]);
-                    VisitRetType::Value(neq)
-                } else {
-                    panic!()
+        match visit_type {
+            VisitType::Global=>unimplemented!(),
+            VisitType::Local(function,bb )=>{
+                match l_and_exp {
+                    LAndExp::EqExp(eq_exp) => self.visit_eq_exp(eq_exp, visit_type),
+                    LAndExp::BinaryOp(l_and_exp, eq_exp) => {
+                        if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                            self.visit_l_and_exp(l_and_exp, visit_type),
+                            self.visit_eq_exp(eq_exp, visit_type),
+                        ) {
+                            let func_data = funcdata!(self, function);
+                            // check if both lval and rval are const
+                            let l_val_data = getvaluedata!(func_data, l_value);
+                            let r_val_data = getvaluedata!(func_data, r_value);
+                            if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                (l_val_data.kind(), r_val_data.kind())
+                            {
+                                let number_value =
+                                    value!(func_data, integer, (l_num.value() !=0 && r_num.value() !=0) as i32);
+                                removevalue!(func_data, l_value);
+                                removevalue!(func_data, r_value);
+                                VisitRetType::Value(number_value)
+                            } else {
+                                let zero_value = value!(func_data, integer, 0);
+                                let neq_l = value!(func_data, binary, BinaryOp::NotEq, l_value, zero_value);
+                                let neq_r = value!(func_data, binary, BinaryOp::NotEq, r_value, zero_value);
+                                let and = value!(func_data, binary, BinaryOp::And, neq_l, neq_r);
+                                let neq = value!(func_data, binary, BinaryOp::NotEq, and, zero_value);
+                                insertvalue!(func_data, bb, [neq_l, neq_r, and, neq]);
+                                VisitRetType::Value(neq)
+                            }
+                        } else {
+                            panic!("Value can not be {:#?}",visit_type)
+                        }
+                    }
                 }
             }
         }
     }
 
     fn visit_eq_exp(&mut self, eq_exp: &ast::EqExp, visit_type: VisitType) -> VisitRetType {
-        match eq_exp {
-            EqExp::RelExp(rel_exp) => self.visit_rel_exp(rel_exp, function, bb),
-            EqExp::BinaryOp(eq_exp, op, rel_exp) => match op {
-                Operator::Equal => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_eq_exp(eq_exp, function, bb),
-                        self.visit_rel_exp(rel_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let eq = value!(func_data, binary, BinaryOp::Eq, l_value, r_value);
-                        insertvalue!(func_data, *bb, [eq]);
-                        VisitRetType::Value(eq)
-                    } else {
-                        panic!()
-                    }
+        match visit_type {
+            VisitType::Global=>unimplemented!(),
+            VisitType::Local(function, bb)=>{
+                match eq_exp {
+                    EqExp::RelExp(rel_exp) => self.visit_rel_exp(rel_exp, visit_type),
+                    EqExp::BinaryOp(eq_exp, op, rel_exp) => match op {
+                        Operator::Equal => {
+                            if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                                self.visit_eq_exp(eq_exp, visit_type),
+                                self.visit_rel_exp(rel_exp, visit_type),
+                            ) {
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value =
+                                        value!(func_data, integer, (l_num.value() == r_num.value()) as i32);
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let eq = value!(func_data, binary, BinaryOp::Eq, l_value, r_value);
+                                    insertvalue!(func_data, bb, [eq]);
+                                    VisitRetType::Value(eq)
+                                }
+                            } else {
+                                panic!("Value can not be {:#?}",visit_type)
+                            }
+                        }
+                        Operator::NotEqual => {
+                            if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                                self.visit_eq_exp(eq_exp, visit_type),
+                                self.visit_rel_exp(rel_exp, visit_type),
+                            ) {
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value =
+                                        value!(func_data, integer, (l_num.value() != r_num.value()) as i32);
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let not_eq = value!(func_data, binary, BinaryOp::NotEq, l_value, r_value);
+                                    insertvalue!(func_data, bb, [not_eq]);
+                                    VisitRetType::Value(not_eq)
+                                }
+
+                            } else {
+                                panic!("Value can not be {:#?}",visit_type)
+                            }
+                        }
+                        _ => {
+                            panic!("Illegal Operator: {:#?}!",op)
+                        }
+                    },
                 }
-                Operator::NotEqual => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_eq_exp(eq_exp, function, bb),
-                        self.visit_rel_exp(rel_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let not_eq = value!(func_data, binary, BinaryOp::NotEq, l_value, r_value);
-                        insertvalue!(func_data, *bb, [not_eq]);
-                        VisitRetType::Value(not_eq)
-                    } else {
-                        panic!()
-                    }
-                }
-                _ => {
-                    panic!()
-                }
-            },
+            }
         }
     }
 
     fn visit_rel_exp(&mut self, rel_exp: &ast::RelExp, visit_type: VisitType) -> VisitRetType {
-        match rel_exp {
-            RelExp::AddExp(add_exp) => self.visit_add_exp(add_exp, function, bb),
-            RelExp::BinaryOp(rel_exp, op, add_exp) => match op {
-                Operator::LessThan => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_rel_exp(rel_exp, function, bb),
-                        self.visit_add_exp(add_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let lt = value!(func_data, binary, BinaryOp::Lt, l_value, r_value);
-                        insertvalue!(func_data, *bb, [lt]);
-                        VisitRetType::Value(lt)
-                    } else {
-                        panic!()
-                    }
+        match visit_type {
+            VisitType::Global => unimplemented!(),
+            VisitType::Local(function, bb) => {
+                match rel_exp {
+                    RelExp::AddExp(add_exp) => self.visit_add_exp(add_exp, visit_type),
+                    RelExp::BinaryOp(rel_exp, op, add_exp) => match op {
+                        Operator::LessThan => {
+                            if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                                self.visit_rel_exp(rel_exp, visit_type),
+                                self.visit_add_exp(add_exp, visit_type),
+                            ) {
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value = value!(
+                                        func_data,
+                                        integer,
+                                        (l_num.value() < r_num.value()) as i32
+                                    );
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let lt =
+                                        value!(func_data, binary, BinaryOp::Lt, l_value, r_value);
+                                    insertvalue!(func_data, bb, [lt]);
+                                    VisitRetType::Value(lt)
+                                }
+                            } else {
+                                panic!("Value can not be {:#?}", visit_type)
+                            }
+                        }
+                        Operator::MoreThan => {
+                            if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                                self.visit_rel_exp(rel_exp, visit_type),
+                                self.visit_add_exp(add_exp, visit_type),
+                            ) {
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value = value!(
+                                        func_data,
+                                        integer,
+                                        (l_num.value() > r_num.value()) as i32
+                                    );
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let mt =
+                                        value!(func_data, binary, BinaryOp::Gt, l_value, r_value);
+                                    insertvalue!(func_data, bb, [mt]);
+                                    VisitRetType::Value(mt)
+                                }
+                            } else {
+                                panic!("Value can not be {:#?}", visit_type)
+                            }
+                        }
+                        Operator::LessOrEqualThan => {
+                            if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                                self.visit_rel_exp(rel_exp, visit_type),
+                                self.visit_add_exp(add_exp, visit_type),
+                            ) {
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value = value!(
+                                        func_data,
+                                        integer,
+                                        (l_num.value() <= r_num.value()) as i32
+                                    );
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let le =
+                                        value!(func_data, binary, BinaryOp::Le, l_value, r_value);
+                                    insertvalue!(func_data, bb, [le]);
+                                    VisitRetType::Value(le)
+                                }
+                            } else {
+                                panic!("Value can not be {:#?}", visit_type)
+                            }
+                        }
+                        Operator::MoreOrEqualThan => {
+                            if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                                self.visit_rel_exp(rel_exp, visit_type),
+                                self.visit_add_exp(add_exp, visit_type),
+                            ) {
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value = value!(
+                                        func_data,
+                                        integer,
+                                        (l_num.value() >= r_num.value()) as i32
+                                    );
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let me =
+                                        value!(func_data, binary, BinaryOp::Ge, l_value, r_value);
+                                    insertvalue!(func_data, bb, [me]);
+                                    VisitRetType::Value(me)
+                                }
+                            } else {
+                                panic!("Value can not be {:#?}", visit_type)
+                            }
+                        }
+                        _ => {
+                            panic!("Illegal Operator: {:#?}!", op)
+                        }
+                    },
                 }
-                Operator::MoreThan => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_rel_exp(rel_exp, function, bb),
-                        self.visit_add_exp(add_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let mt = value!(func_data, binary, BinaryOp::Gt, l_value, r_value);
-                        insertvalue!(func_data, *bb, [mt]);
-                        VisitRetType::Value(mt)
-                    } else {
-                        panic!()
-                    }
-                }
-                Operator::LessOrEqualThan => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_rel_exp(rel_exp, function, bb),
-                        self.visit_add_exp(add_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let le = value!(func_data, binary, BinaryOp::Le, l_value, r_value);
-                        insertvalue!(func_data, *bb, [le]);
-                        VisitRetType::Value(le)
-                    } else {
-                        panic!()
-                    }
-                }
-                Operator::MoreOrEqualThan => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_rel_exp(rel_exp, function, bb),
-                        self.visit_add_exp(add_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let me = value!(func_data, binary, BinaryOp::Ge, l_value, r_value);
-                        insertvalue!(func_data, *bb, [me]);
-                        VisitRetType::Value(me)
-                    } else {
-                        panic!()
-                    }
-                }
-                _ => {
-                    panic!()
-                }
-            },
+            }
         }
     }
 
     fn visit_add_exp(&mut self, add_exp: &ast::AddExp, visit_type: VisitType) -> VisitRetType {
-        match add_exp {
-            AddExp::MulExp(mul_exp) => self.visit_mul_exp(mul_exp, function, bb),
-            AddExp::BinaryOp(add_exp, op, mul_exp) => match op {
-                Operator::Add => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_add_exp(add_exp, function, bb),
-                        self.visit_mul_exp(mul_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let add = value!(func_data, binary, BinaryOp::Add, l_value, r_value);
-                        insertvalue!(func_data, *bb, [add]);
-                        VisitRetType::Value(add)
-                    } else {
-                        panic!()
+        match visit_type {
+            VisitType::Global => unimplemented!(),
+            VisitType::Local(function, bb) => match add_exp {
+                AddExp::MulExp(mul_exp) => self.visit_mul_exp(mul_exp, visit_type),
+                AddExp::BinaryOp(add_exp, op, mul_exp) => match op {
+                    Operator::Add => {
+                        if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                            self.visit_add_exp(add_exp, visit_type),
+                            self.visit_mul_exp(mul_exp, visit_type),
+                        ) {
+                            let func_data = funcdata!(self, function);
+                            // check if both lval and rval are const
+                            let l_val_data = getvaluedata!(func_data, l_value);
+                            let r_val_data = getvaluedata!(func_data, r_value);
+                            if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                (l_val_data.kind(), r_val_data.kind())
+                            {
+                                let number_value =
+                                    value!(func_data, integer, l_num.value() + r_num.value());
+                                removevalue!(func_data, l_value);
+                                removevalue!(func_data, r_value);
+                                VisitRetType::Value(number_value)
+                            } else {
+                                let add =
+                                    value!(func_data, binary, BinaryOp::Add, l_value, r_value);
+                                insertvalue!(func_data, bb, [add]);
+                                VisitRetType::Value(add)
+                            }
+                        } else {
+                            panic!("Value can not be {:#?}", visit_type)
+                        }
                     }
-                }
-                Operator::Subtract => {
-                    if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                        self.visit_add_exp(add_exp, function, bb),
-                        self.visit_mul_exp(mul_exp, function, bb),
-                    ) {
-                        let func_data = funcdata!(self, *function);
-                        let sub = value!(func_data, binary, BinaryOp::Sub, l_value, r_value);
-                        insertvalue!(func_data, *bb, [sub]);
-                        VisitRetType::Value(sub)
-                    } else {
-                        panic!()
+                    Operator::Subtract => {
+                        if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
+                            self.visit_add_exp(add_exp, visit_type),
+                            self.visit_mul_exp(mul_exp, visit_type),
+                        ) {
+                            let func_data = funcdata!(self, function);
+                            // check if both lval and rval are const
+                            let l_val_data = getvaluedata!(func_data, l_value);
+                            let r_val_data = getvaluedata!(func_data, r_value);
+                            if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                (l_val_data.kind(), r_val_data.kind())
+                            {
+                                let number_value =
+                                    value!(func_data, integer, l_num.value() - r_num.value());
+                                removevalue!(func_data, l_value);
+                                removevalue!(func_data, r_value);
+                                VisitRetType::Value(number_value)
+                            } else {
+                                let sub =
+                                    value!(func_data, binary, BinaryOp::Sub, l_value, r_value);
+                                insertvalue!(func_data, bb, [sub]);
+                                VisitRetType::Value(sub)
+                            }
+                        } else {
+                            panic!("Value can not be {:#?}", visit_type)
+                        }
                     }
-                }
-                _ => {
-                    panic!()
-                }
+                    _ => {
+                        panic!("Illegal Operator: {:#?}!", op)
+                    }
+                },
             },
         }
     }
 
     fn visit_mul_exp(&mut self, mul_exp: &ast::MulExp, visit_type: VisitType) -> VisitRetType {
         match visit_type {
-            VisitType::Global=>{
+            VisitType::Global => {
                 unimplemented!()
             }
-            VisitType::Local(function,bb )=>{
+            VisitType::Local(function, bb) => {
                 match mul_exp {
                     MulExp::UnaryExp(unary_exp) => self.visit_unary_exp(unary_exp, visit_type),
                     MulExp::BinaryOp(mul_exp, op, unary_exp) => match op {
@@ -463,42 +668,84 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 self.visit_mul_exp(mul_exp, visit_type),
                                 self.visit_unary_exp(unary_exp, visit_type),
                             ) {
-                                let func_data = funcdata!(self, *function);
-                                let mul = value!(func_data, binary, BinaryOp::Mul, l_value, r_value);
-                                insertvalue!(func_data, *bb, [mul]);
-                                VisitRetType::Value(mul)
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value =
+                                        value!(func_data, integer, l_num.value() * r_num.value());
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let mul =
+                                        value!(func_data, binary, BinaryOp::Mul, l_value, r_value);
+                                    insertvalue!(func_data, bb, [mul]);
+                                    VisitRetType::Value(mul)
+                                }
                             } else {
-                                panic!("Value can not be VisitRetType::None!")
+                                panic!("Value can not be {:#?}", visit_type)
                             }
                         }
                         Operator::Divide => {
                             if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                                self.visit_mul_exp(mul_exp, function, bb),
-                                self.visit_unary_exp(unary_exp, function, bb),
+                                self.visit_mul_exp(mul_exp, visit_type),
+                                self.visit_unary_exp(unary_exp, visit_type),
                             ) {
-                                let func_data = funcdata!(self, *function);
-                                let div = value!(func_data, binary, BinaryOp::Div, l_value, r_value);
-                                insertvalue!(func_data, *bb, [div]);
-                                VisitRetType::Value(div)
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value =
+                                        value!(func_data, integer, l_num.value() / r_num.value());
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let div =
+                                        value!(func_data, binary, BinaryOp::Div, l_value, r_value);
+                                    insertvalue!(func_data, bb, [div]);
+                                    VisitRetType::Value(div)
+                                }
                             } else {
-                                panic!("Value can not be VisitRetType::None!")
+                                panic!("Value can not be {:#?}", visit_type)
                             }
                         }
                         Operator::GetRemainder => {
                             if let (VisitRetType::Value(l_value), VisitRetType::Value(r_value)) = (
-                                self.visit_mul_exp(mul_exp, function, bb),
-                                self.visit_unary_exp(unary_exp, function, bb),
+                                self.visit_mul_exp(mul_exp, visit_type),
+                                self.visit_unary_exp(unary_exp, visit_type),
                             ) {
-                                let func_data = funcdata!(self, *function);
-                                let mod_value = value!(func_data, binary, BinaryOp::Mod, l_value, r_value);
-                                insertvalue!(func_data, *bb, [mod_value]);
-                                VisitRetType::Value(mod_value)
+                                let func_data = funcdata!(self, function);
+                                // check if both lval and rval are const
+                                let l_val_data = getvaluedata!(func_data, l_value);
+                                let r_val_data = getvaluedata!(func_data, r_value);
+                                if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                                    (l_val_data.kind(), r_val_data.kind())
+                                {
+                                    let number_value =
+                                        value!(func_data, integer, l_num.value() % r_num.value());
+                                    removevalue!(func_data, l_value);
+                                    removevalue!(func_data, r_value);
+                                    VisitRetType::Value(number_value)
+                                } else {
+                                    let mod_value =
+                                        value!(func_data, binary, BinaryOp::Mod, l_value, r_value);
+                                    insertvalue!(func_data, bb, [mod_value]);
+                                    VisitRetType::Value(mod_value)
+                                }
                             } else {
-                                panic!("Value can not be VisitRetType::None!")
+                                panic!("Value can not be {:#?}", visit_type)
                             }
                         }
                         _ => {
-                            panic!("Illegal Operator: {:#?}!",op)
+                            panic!("Illegal Operator: {:#?}!", op)
                         }
                     },
                 }
@@ -512,12 +759,14 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         visit_type: VisitType,
     ) -> VisitRetType {
         match visit_type {
-            VisitType::Global =>{
+            VisitType::Global => {
                 unimplemented!()
             }
-            VisitType::Local(function,bb)=>{
+            VisitType::Local(function, bb) => {
                 match unary_exp {
-                    UnaryExp::PrimaryExp(primary_exp) => self.visit_primary_exp(primary_exp, visit_type),
+                    UnaryExp::PrimaryExp(primary_exp) => {
+                        self.visit_primary_exp(primary_exp, visit_type)
+                    }
                     UnaryExp::UnaryOp(op, unary_exp) => match op {
                         Operator::Add => self.visit_unary_exp(unary_exp, visit_type),
                         Operator::Subtract => {
@@ -525,23 +774,30 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 self.visit_unary_exp(unary_exp, visit_type)
                             {
                                 // check if value is a const
-                                let func_data = funcdata!(self, *function);
-                                let value_data = getvaluedata!(func_data,value);
+                                let func_data = funcdata!(self, function);
+                                let value_data = getvaluedata!(func_data, value);
                                 match value_data.kind() {
-                                    ValueKind::Integer(integer) =>{
-                                        let number_value = value!(func_data,integer,-integer.value());
-                                        removevalue!(func_data,value);
+                                    ValueKind::Integer(integer) => {
+                                        let number_value =
+                                            value!(func_data, integer, -integer.value());
+                                        removevalue!(func_data, value);
                                         VisitRetType::Value(number_value)
                                     }
-                                    _=>{
+                                    _ => {
                                         let zero_value = value!(func_data, integer, 0);
-                                        let sub = value!(func_data, binary, BinaryOp::Sub, zero_value, value);
-                                        insertvalue!(func_data, *bb, [sub]);
+                                        let sub = value!(
+                                            func_data,
+                                            binary,
+                                            BinaryOp::Sub,
+                                            zero_value,
+                                            value
+                                        );
+                                        insertvalue!(func_data, bb, [sub]);
                                         VisitRetType::Value(sub)
                                     }
                                 }
                             } else {
-                                panic!("Value can not be VisitRetType::None!")
+                                panic!("Value can not be {:#?}", visit_type)
                             }
                         }
                         Operator::Not => {
@@ -549,28 +805,34 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 self.visit_unary_exp(unary_exp, visit_type)
                             {
                                 // check if value is a const
-                                let func_data = funcdata!(self, *function);
-                                let value_data = getvaluedata!(func_data,value);
+                                let func_data = funcdata!(self, function);
+                                let value_data = getvaluedata!(func_data, value);
                                 match value_data.kind() {
-                                    ValueKind::Integer(integer)=>{
-                                        let number_value = value!(func_data,integer,!integer.value());
-                                        removevalue!(func_data,value);
-                                        VisitRetType::Value(number_value) 
+                                    ValueKind::Integer(integer) => {
+                                        let number_value =
+                                            value!(func_data, integer, (integer.value()==0) as i32);
+                                        removevalue!(func_data, value);
+                                        VisitRetType::Value(number_value)
                                     }
-                                    _=>{
+                                    _ => {
                                         let zero_value = value!(func_data, integer, 0);
-                                        let eq = value!(func_data, binary, BinaryOp::Eq, zero_value, value);
-                                        insertvalue!(func_data, *bb, [eq]);
+                                        let eq = value!(
+                                            func_data,
+                                            binary,
+                                            BinaryOp::Eq,
+                                            zero_value,
+                                            value
+                                        );
+                                        insertvalue!(func_data, bb, [eq]);
                                         VisitRetType::Value(eq)
                                     }
                                 }
-
                             } else {
-                                panic!("Value can not be VisitRetType::None!")
+                                panic!("Value can not be {:#?}", visit_type)
                             }
                         }
                         _ => {
-                            panic!("Illegal Operator: {:#?}!",op)
+                            panic!("Illegal Operator: {:#?}!", op)
                         }
                     },
                 }
@@ -599,12 +861,12 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                 //         unimplemented!()
                 //     }
                 // }
-            },
-            VisitType::Local(function,_) => match primary_exp {
+            }
+            VisitType::Local(function, _) => match primary_exp {
                 PrimaryExp::Exp(exp) => self.visit_exp(exp, visit_type),
                 PrimaryExp::Number(number) => match number {
                     Number::IntConst(int_const) => {
-                        let func_data = funcdata!(self,*function);
+                        let func_data = funcdata!(self, function);
                         let number_value = value!(func_data, integer, *int_const);
                         VisitRetType::Value(number_value)
                     }

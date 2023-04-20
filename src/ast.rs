@@ -1,5 +1,3 @@
-use std::fmt;
-
 use koopa::ir::{BasicBlock, Function};
 
 pub type Ident = String;
@@ -229,23 +227,15 @@ pub trait Visitor<T, V> {
     fn visit_const_decl(&mut self, const_decl: &ConstDecl, v: V) -> T;
     fn visit_const_def(&mut self, const_def: &ConstDef, v: V) -> T;
     fn visit_const_init_val(&mut self, cons_init_val: &ConstInitVal, v: V) -> T;
-
     fn visit_var_decl(&mut self, var_decl: &VarDecl, v: V) -> T;
-
     fn visit_var_def(&mut self, var_def: &VarDef, v: V) -> T;
     fn visit_init_val(&mut self, init_val: &InitVal, v: V) -> T;
-
     fn visit_func_def(&mut self, func_def: &FuncDef) -> T;
-    fn visit_block(&mut self, block: &Block, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_block_item(
-        &mut self,
-        block_item: &BlockItem,
-        function: &Function,
-        bb: &BasicBlock,
-    ) -> T;
-    fn visit_stmt(&mut self, stmt: &Stmt, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, function: &Function, bb: &BasicBlock) -> T;
-    fn visit_ass_stmt(&mut self, ass_stmt: &AssignStmt, function: &Function, bb: &BasicBlock) -> T;
+    fn visit_block(&mut self, block: &Block, v: V) -> T;
+    fn visit_block_item(&mut self, block_item: &BlockItem, v: V) -> T;
+    fn visit_stmt(&mut self, stmt: &Stmt, v: V) -> T;
+    fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, v: V) -> T;
+    fn visit_ass_stmt(&mut self, ass_stmt: &AssignStmt, v: V) -> T;
     fn visit_l_val(&mut self, l_val: &LVal, v: V) -> T;
     fn visit_const_exp(&mut self, const_exp: &ConstExp, v: V) -> T;
     fn visit_exp(&mut self, exp: &Exp, v: V) -> T;
