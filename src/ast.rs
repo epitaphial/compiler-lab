@@ -1,5 +1,3 @@
-use koopa::ir::{BasicBlock, Function};
-
 pub type Ident = String;
 
 #[derive(Debug)]

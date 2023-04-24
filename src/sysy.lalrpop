@@ -24,7 +24,7 @@ Decl:ast::Decl = {
 // ConstDecl ::= "const" BType ConstDef {"," ConstDef} ";";
 ConstDecl:ast::ConstDecl = {
     "const" <const_type:Type> <const_def:ConstDef> <mut const_defs:("," <ConstDef> )*> ";" =>{
-        const_defs.push(const_def);
+        const_defs.insert(0,const_def);
         ast::ConstDecl{
             const_type,
             const_defs,
@@ -47,7 +47,7 @@ ConstDef:ast::ConstDef = {
 // ConstInitVal ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}";
 ConstInitVal:ast::ConstInitVal = {
     ConstExp => ast::ConstInitVal::ConstExp(<>),
-    "{" <mut const_init_val_tuple:(ConstInitVal ("," <ConstInitVal>)*)?> "}" => {
+    "{" <const_init_val_tuple:(ConstInitVal ("," <ConstInitVal>)*)?> "}" => {
         if let Some(const_init_val_tuple) = const_init_val_tuple{
             let (const_init_val,mut const_init_vals) = const_init_val_tuple;
             const_init_vals.push(const_init_val);
@@ -61,7 +61,7 @@ ConstInitVal:ast::ConstInitVal = {
 // VarDecl ::= BType VarDef {"," VarDef} ";";
 VarDecl:ast::VarDecl = {
     <var_type:Type> <var_def:VarDef> <mut var_defs:("," <VarDef>)*> ";"=>{
-        var_defs.push(var_def);
+        var_defs.insert(0,var_def);
         ast::VarDecl{
             var_type,
             var_defs,
@@ -83,7 +83,7 @@ VarDef:ast::VarDef = {
 // InitVal ::= Exp | "{" [InitVal {"," InitVal}] "}";
 InitVal:ast::InitVal = {
     Exp => ast::InitVal::Exp(<>),
-    "{" <mut init_val_tuple:(InitVal ("," <InitVal>)*)?> "}" => {
+    "{" <init_val_tuple:(InitVal ("," <InitVal>)*)?> "}" => {
         if let Some(init_val_tuple) = init_val_tuple{
             let (init_val,mut init_vals) = init_val_tuple;
             init_vals.push(init_val);
@@ -145,7 +145,6 @@ AssignStmt:ast::AssignStmt = {
 // LVal ::= IDENT {"[" Exp "]"};
 LVal:ast::LVal = {
     <ident:Ident> <exps:("[" <Exp> "]")*> => {
-        println!("{:#?}",exps);
         ast::LVal{<>}
     }
 };

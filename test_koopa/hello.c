@@ -1,12 +1,6 @@
 int main()
 {
-  /*
-  * fefedfe
-  * fedfe/*
-   /
-   */
-  // wsdffwfwsfwsfw
-  // fwfswwfwfssw
-  ////swfwsf
-  return 2>=3;
+  int x = 2;
+  int y=x+1;
+  return y;
 }
