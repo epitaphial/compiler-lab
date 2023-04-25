@@ -60,6 +60,14 @@ impl BlockNode {
         }
     }
 
+    // pub fn reassign_symbol(&self,name: &String,value: Value){
+    //     if self.symbols.borrow().get(name) == None{
+    //         panic!("Undefined symbol: {}", &name);
+    //     }else{
+    //         (*self.symbols.borrow_mut()).insert(name.clone(), value);
+    //     }
+    // }
+
     pub fn lookup_symbol(&self, name: &String) -> Value {
         if let Some(value) = self.symbols.borrow().get(name) {
             *value
@@ -197,7 +205,6 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     ) -> VisitRetType {
         // do some type check here...?
         for const_def in &const_decl.const_defs {
-            println!("{:#?}", const_def.const_ident);
             self.visit_const_def(const_def, visit_type.clone());
         }
         VisitRetType::None
@@ -360,7 +367,9 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             Stmt::RetStmt(ret_stmt) => {
                 self.visit_ret_stmt(ret_stmt, visit_type);
             }
-            Stmt::AssignStmt(_ass_stmt) => {}
+            Stmt::AssignStmt(ass_stmt) => {
+                self.visit_ass_stmt(ass_stmt, visit_type);
+            }
         }
         VisitRetType::None
     }
@@ -396,10 +405,26 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
 
     fn visit_ass_stmt(
         &mut self,
-        _ass_stmt: &ast::AssignStmt,
-        _visit_type: VisitType,
+        ass_stmt: &ast::AssignStmt,
+        visit_type: VisitType,
     ) -> VisitRetType {
-        unimplemented!();
+        match visit_type.clone() {
+            VisitType::Global => {
+                panic!("Value can not be {:#?}", visit_type)
+            }
+            VisitType::Local(function, bb, bn) => {
+                if let VisitRetType::Value(value) = self.visit_exp(&ass_stmt.exp, visit_type) {
+                    let ass_l_value = bn.lookup_symbol(&ass_stmt.l_val.ident);
+                    let func_data = funcdata!(self, function);
+                    // must do some type check, because we can't assign to a const!
+                    let store = value!(func_data, store, value, ass_l_value);
+                    insertvalue!(func_data, bb, [store]);
+                } else {
+                    panic!()
+                }
+            }
+        }
+        VisitRetType::None
     }
 
     fn visit_l_val(&mut self, l_val: &ast::LVal, visit_type: VisitType) -> VisitRetType {
@@ -410,13 +435,13 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             }
             VisitType::Local(function, bb, bn) => {
                 let value = bn.lookup_symbol(&l_val.ident);
-                let func_data = funcdata!(self,function);
-                let value_data = getvaluedata!(func_data,value);
-                if matches!(value_data.kind(),ValueKind::Alloc(_)){
-                    let load = value!(func_data,load,value);
+                let func_data = funcdata!(self, function);
+                let value_data = getvaluedata!(func_data, value);
+                if matches!(value_data.kind(), ValueKind::Alloc(_)) {
+                    let load = value!(func_data, load, value);
                     insertvalue!(func_data, bb, [load]);
                     VisitRetType::Value(load)
-                }else{
+                } else {
                     VisitRetType::Value(value)
                 }
             }
@@ -1066,7 +1091,6 @@ impl Parser {
     }
     pub fn parse(&mut self, source_code: &String) -> Result<&Program, Box<dyn Error>> {
         let ast = sysy::CompUnitParser::new().parse(&source_code).unwrap();
-        // testtest();
         self.visit_comp_unit(&ast);
         Ok(&self.program)
     }

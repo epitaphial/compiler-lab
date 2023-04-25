@@ -1,3 +1,4 @@
+use core::panic;
 use std::fs::File;
 use std::io::Write;
 
@@ -55,6 +56,7 @@ impl AsmGenerator for FunctionData {
                 match value_data.ty().kind() {
                     TypeKind::Int32 => stack_size += 4,
                     TypeKind::Unit => {}
+                    TypeKind::Pointer(_) => stack_size += 4,
                     _ => {}
                 }
             }
@@ -103,6 +105,7 @@ impl AsmGenerator for ValueData {
     fn get_value(&self, func_data: &FunctionData, value: &Value, stack: &Stack) -> AsmValue {
         let value_data = func_data.dfg().value(*value);
         match value_data.kind() {
+            // Integer value return the lireral while others return the stack position.
             ValueKind::Integer(int_value) => AsmValue::Literal(int_value.value()),
             _ => {
                 let pos = stack.get_pos_by_value(*value);
@@ -194,9 +197,43 @@ impl AsmGenerator for ValueData {
                     }
                 }
                 asm_inst.push_inst(format!("ret"));
-                //println!("{:#?}", ret_value);
             }
-            _ => {}
+            ValueKind::Load(load) => {
+                let src_value = self.get_value(func_data, &load.src(), stack);
+                if let AsmValue::StackPos(pos) = src_value {
+                    asm_inst.push_inst(format!("lw t0, {}(sp)", pos));
+                } else {
+                    panic!("Can't load this type!")
+                }
+                asm_inst.push_inst(format!("sw t0, {}(sp)", stack.get_stack_sp()));
+                stack.insert_value(*value, 4);
+            }
+            ValueKind::Store(store) => {
+                let dest_value = self.get_value(func_data, &store.dest(), stack);
+                let src_value = self.get_value(func_data, &store.value(), stack);
+                match dest_value {
+                    AsmValue::StackPos(dest_pos) => {
+                        match src_value {
+                            AsmValue::Literal(src_lit) => {
+                                asm_inst.push_inst(format!("li t0, {}", src_lit));
+                            }
+                            AsmValue::StackPos(src_pos) => {
+                                asm_inst.push_inst(format!("lw t0, {}(sp)", src_pos));
+                            }
+                        }
+                        asm_inst.push_inst(format!("sw t0, {}(sp)", dest_pos));
+                    }
+                    AsmValue::Literal(_lit) => {
+                        panic!("Cant be this!")
+                    }
+                }
+            }
+            ValueKind::Alloc(_) => {
+                stack.insert_value(*value, 4);
+            }
+            _ => {
+                unimplemented!()
+            }
         }
         asm_inst
     }
