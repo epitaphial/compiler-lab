@@ -122,11 +122,25 @@ pub enum BlockItem {
 pub enum Stmt {
     RetStmt(RetStmt),
     AssignStmt(AssignStmt),
+    ExpStmt(ExpStmt),
+    BlockStmt(BlockStmt),
+}
+
+// BlockStmt ::= Block
+#[derive(Debug)]
+pub struct BlockStmt {
+    pub block: Block,
 }
 
 // RetStmt ::= "return" [Exp] ";";
 #[derive(Debug)]
 pub struct RetStmt {
+    pub exp: Option<Exp>,
+}
+
+// ExpStmt ::= [Exp] ";";
+#[derive(Debug)]
+pub struct ExpStmt {
     pub exp: Option<Exp>,
 }
 
@@ -232,7 +246,9 @@ pub trait Visitor<T, V> {
     fn visit_block(&mut self, block: &Block, v: V) -> T;
     fn visit_block_item(&mut self, block_item: &BlockItem, v: V) -> T;
     fn visit_stmt(&mut self, stmt: &Stmt, v: V) -> T;
+    fn visit_block_stmt(&mut self, block_stmt: &BlockStmt, v: V) -> T;
     fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, v: V) -> T;
+    fn visit_exp_stmt(&mut self, exp_stmt: &ExpStmt, v: V) -> T;
     fn visit_ass_stmt(&mut self, ass_stmt: &AssignStmt, v: V) -> T;
     fn visit_l_val(&mut self, l_val: &LVal, v: V) -> T;
     fn visit_const_exp(&mut self, const_exp: &ConstExp, v: V) -> T;

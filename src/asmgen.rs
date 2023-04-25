@@ -10,8 +10,6 @@ use koopa::ir::{
 
 use crate::asm::{AsmBasicBlock, AsmFunction, AsmInstruction, AsmProgram, Stack};
 
-//static mut VALUE_REG_MAP:HashMap<Value,String> = HashMap::new();
-
 trait AsmGenerator {
     fn generate_program(&self) -> AsmProgram {
         panic!()

@@ -44,7 +44,7 @@ struct BlockNode {
     // symbol name and symbol value
     pub symbols: RefCell<HashMap<String, Value>>,
     pub parent: RefCell<Option<Weak<BlockNode>>>,
-    pub _childs: RefCell<Vec<Rc<BlockNode>>>,
+    pub childs: RefCell<Vec<Rc<BlockNode>>>,
 }
 
 impl BlockNode {
@@ -60,13 +60,6 @@ impl BlockNode {
         }
     }
 
-    // pub fn reassign_symbol(&self,name: &String,value: Value){
-    //     if self.symbols.borrow().get(name) == None{
-    //         panic!("Undefined symbol: {}", &name);
-    //     }else{
-    //         (*self.symbols.borrow_mut()).insert(name.clone(), value);
-    //     }
-    // }
 
     pub fn lookup_symbol(&self, name: &String) -> Value {
         if let Some(value) = self.symbols.borrow().get(name) {
@@ -85,10 +78,10 @@ impl BlockNode {
         }
     }
 
-    // pub fn insert_block(parent: Rc<BlockNode>, child: Rc<BlockNode>) {
-    //     parent.childs.borrow_mut().push(child.clone());
-    //     *child.parent.borrow_mut() = Some(Rc::downgrade(&parent));
-    // }
+    pub fn insert_block(parent: Rc<BlockNode>, child: Rc<BlockNode>) {
+        parent.childs.borrow_mut().push(child.clone());
+        *child.parent.borrow_mut() = Some(Rc::downgrade(&parent));
+    }
 }
 
 // pub fn testtest() {
@@ -370,6 +363,27 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             Stmt::AssignStmt(ass_stmt) => {
                 self.visit_ass_stmt(ass_stmt, visit_type);
             }
+            Stmt::ExpStmt(exp_stmt) => {
+                self.visit_exp_stmt(exp_stmt, visit_type);
+            }
+            Stmt::BlockStmt(block_stmt)=>{
+                self.visit_block_stmt(block_stmt, visit_type);
+            }
+        }
+        VisitRetType::None
+    }
+
+    fn visit_block_stmt(&mut self, block_stmt: &ast::BlockStmt, visit_type: VisitType) -> VisitRetType {
+        match visit_type.clone() {
+            VisitType::Global=>{
+                panic!("Can not be {:#?}",visit_type)
+            }
+            VisitType::Local(function, bb, bn)=>{
+                let new_node =  BlockNode::new();
+                BlockNode::insert_block(bn.clone(), new_node.clone());
+                let visit_type = VisitType::Local(function, bb, new_node);
+                self.visit_block(&block_stmt.block, visit_type);
+            }
         }
         VisitRetType::None
     }
@@ -401,6 +415,20 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             }
         }
         VisitRetType::None
+    }
+
+    fn visit_exp_stmt(&mut self, exp_stmt: &ast::ExpStmt, visit_type: VisitType) -> VisitRetType {
+        match visit_type.clone() {
+            VisitType::Global => {
+                panic!("Can not be {:#?}", visit_type)
+            }
+            VisitType::Local(_, _, _) => {
+                if let Some(exp) = &exp_stmt.exp {
+                    self.visit_exp(exp, visit_type);
+                }
+                VisitRetType::None
+            }
+        }
     }
 
     fn visit_ass_stmt(

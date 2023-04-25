@@ -117,7 +117,7 @@ BlockItem:ast::BlockItem = {
     Stmt => ast::BlockItem::Stmt(<>),
 };
 
-// Expect: Stmt ::= LVal "=" Exp ";"
+// Stmt ::= LVal "=" Exp ";"
 // | [Exp] ";"
 // | Block
 // | "if" "(" Exp ")" Stmt ["else" Stmt]
@@ -125,17 +125,27 @@ BlockItem:ast::BlockItem = {
 // | "break" ";"
 // | "continue" ";"
 // | RetStmt;
-// Now: Stmt ::= RetStmt
-// | AssignStmt;
 Stmt:ast::Stmt = {
     RetStmt => ast::Stmt::RetStmt(<>),
     AssignStmt => ast::Stmt::AssignStmt(<>),
+    ExpStmt => ast::Stmt::ExpStmt(<>),
+    BlockStmt => ast::Stmt::BlockStmt(<>),
+};
+
+// BlockStmt ::= Block;
+BlockStmt:ast::BlockStmt = {
+    <block:Block> => ast::BlockStmt{<>},
 };
 
 // RetStmt ::= "return" [Exp] ";";
 RetStmt:ast::RetStmt = {
     "return" <exp:Exp?> ";" => ast::RetStmt{<>},
 };
+
+// ExpStmt ::= [Exp] ";";
+ExpStmt:ast::ExpStmt = {
+    <exp:Exp?> ";" => ast::ExpStmt{<>},
+}
 
 // AssignStmt ::= LVal "=" Exp ";"
 AssignStmt:ast::AssignStmt = {
