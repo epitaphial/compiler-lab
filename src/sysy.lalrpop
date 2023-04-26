@@ -117,19 +117,30 @@ BlockItem:ast::BlockItem = {
     Stmt => ast::BlockItem::Stmt(<>),
 };
 
-// Stmt ::= LVal "=" Exp ";"
-// | [Exp] ";"
-// | Block
-// | "if" "(" Exp ")" Stmt ["else" Stmt]
-// | "while" "(" Exp ")" Stmt
-// | "break" ";"
-// | "continue" ";"
-// | RetStmt;
+// Stmt ::= MatchedStmt | UnmatchedStmt
 Stmt:ast::Stmt = {
     RetStmt => ast::Stmt::RetStmt(<>),
     AssignStmt => ast::Stmt::AssignStmt(<>),
     ExpStmt => ast::Stmt::ExpStmt(<>),
     BlockStmt => ast::Stmt::BlockStmt(<>),
+};
+
+// MatchedStmt ::= LVal "=" Exp ";"
+// | [Exp] ";"
+// | Block
+// | "break" ";"
+// | "continue" ";"
+// | "return" [Exp] ";"
+// | "if" "(" Exp ")" MatchedStmt "else" MatchedStmt
+// | "while" "(" Exp ")" MatchedStmt;
+MatchedStmt:ast::Stmt = {
+
+};
+
+// UnmatchedStmt ::= "if" "(" Exp ")" Stmt
+// | "if" "(" Exp ")" MatchedStmt "else" UnmatchedStmt
+UnmatchedStmt:ast::Stmt = {
+
 };
 
 // BlockStmt ::= Block;

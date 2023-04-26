@@ -124,6 +124,7 @@ pub enum Stmt {
     AssignStmt(AssignStmt),
     ExpStmt(ExpStmt),
     BlockStmt(BlockStmt),
+    IfStmt(Box<IfStmt>),
 }
 
 // BlockStmt ::= Block
@@ -142,6 +143,14 @@ pub struct RetStmt {
 #[derive(Debug)]
 pub struct ExpStmt {
     pub exp: Option<Exp>,
+}
+
+// IfStmt := "if" "(" Exp ")" Stmt ["else" Stmt];
+#[derive(Debug)]
+pub struct IfStmt {
+    pub cond_exp:Exp,
+    pub then_stmt:Stmt,
+    pub else_stmt:Stmt,
 }
 
 // AssignStmt ::= LVal "=" Exp ";"

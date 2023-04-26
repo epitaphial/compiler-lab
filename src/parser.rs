@@ -369,6 +369,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             Stmt::BlockStmt(block_stmt)=>{
                 self.visit_block_stmt(block_stmt, visit_type);
             }
+            Stmt::IfStmt(_)=>unimplemented!()
         }
         VisitRetType::None
     }
