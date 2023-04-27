@@ -60,7 +60,6 @@ impl BlockNode {
         }
     }
 
-
     pub fn lookup_symbol(&self, name: &String) -> Value {
         if let Some(value) = self.symbols.borrow().get(name) {
             *value
@@ -102,6 +101,7 @@ pub struct Parser {
 
 enum VisitRetType {
     Value(Value),
+    BasicBlock(BasicBlock),
     None,
 }
 
@@ -345,48 +345,54 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         visit_type: VisitType,
     ) -> VisitRetType {
         match block_item {
-            BlockItem::Stmt(stmt) => {
-                self.visit_stmt(stmt, visit_type);
-            }
-            BlockItem::Decl(decl) => {
-                self.visit_decl(decl, visit_type);
-            }
+            BlockItem::Stmt(stmt) => self.visit_stmt(stmt, visit_type),
+            BlockItem::Decl(decl) => self.visit_decl(decl, visit_type),
         }
-        VisitRetType::None
     }
 
     fn visit_stmt(&mut self, stmt: &crate::ast::Stmt, visit_type: VisitType) -> VisitRetType {
         match stmt {
-            Stmt::RetStmt(ret_stmt) => {
-                self.visit_ret_stmt(ret_stmt, visit_type);
+            Stmt::RetStmt(ret_stmt) => self.visit_ret_stmt(ret_stmt, visit_type),
+            Stmt::AssignStmt(ass_stmt) => self.visit_ass_stmt(ass_stmt, visit_type),
+            Stmt::ExpStmt(exp_stmt) => self.visit_exp_stmt(exp_stmt, visit_type),
+            Stmt::BlockStmt(block_stmt) => self.visit_block_stmt(block_stmt, visit_type),
+            Stmt::IfStmt(if_stmt) => self.visit_if_stmt(if_stmt, visit_type),
+        }
+    }
+
+    fn visit_if_stmt(&mut self, if_stmt: &ast::IfStmt, visit_type: VisitType) -> VisitRetType {
+        // 1. deal with exp; 2. new bb for then; 3. new bb for else; 4. new bb for end; 5. add jmp from then and else to end, and dont forget to change folowing block item's bb.
+        match visit_type.clone() {
+            VisitType::Global => {
+                panic!("Can not be {:#?}", visit_type)
             }
-            Stmt::AssignStmt(ass_stmt) => {
-                self.visit_ass_stmt(ass_stmt, visit_type);
+            VisitType::Local(function, bb, bn) => {
+                if let VisitRetType::Value(exp_value) = self.visit_exp(&if_stmt.cond_exp, visit_type)  {
+                    
+                }else{
+                    panic!("Condition must be a expresson")
+                }
             }
-            Stmt::ExpStmt(exp_stmt) => {
-                self.visit_exp_stmt(exp_stmt, visit_type);
-            }
-            Stmt::BlockStmt(block_stmt)=>{
-                self.visit_block_stmt(block_stmt, visit_type);
-            }
-            Stmt::IfStmt(_)=>unimplemented!()
         }
         VisitRetType::None
     }
 
-    fn visit_block_stmt(&mut self, block_stmt: &ast::BlockStmt, visit_type: VisitType) -> VisitRetType {
+    fn visit_block_stmt(
+        &mut self,
+        block_stmt: &ast::BlockStmt,
+        visit_type: VisitType,
+    ) -> VisitRetType {
         match visit_type.clone() {
-            VisitType::Global=>{
-                panic!("Can not be {:#?}",visit_type)
+            VisitType::Global => {
+                panic!("Can not be {:#?}", visit_type)
             }
-            VisitType::Local(function, bb, bn)=>{
-                let new_node =  BlockNode::new();
+            VisitType::Local(function, bb, bn) => {
+                let new_node = BlockNode::new();
                 BlockNode::insert_block(bn.clone(), new_node.clone());
                 let visit_type = VisitType::Local(function, bb, new_node);
-                self.visit_block(&block_stmt.block, visit_type);
+                self.visit_block(&block_stmt.block, visit_type)
             }
         }
-        VisitRetType::None
     }
 
     fn visit_ret_stmt(
@@ -405,7 +411,10 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                             insertvalue!(func_data, bb, [ret]);
                         }
                         VisitRetType::None => {
-                            panic!("Return value can not be VisitRetType::None")
+                            panic!("Return exp value can not be VisitRetType::None!")
+                        }
+                        VisitRetType::BasicBlock(_) => {
+                            panic!("Return exp value can not be VisitRetType::BasicBlock!")
                         }
                     }
                 } else {
@@ -1120,6 +1129,7 @@ impl Parser {
     }
     pub fn parse(&mut self, source_code: &String) -> Result<&Program, Box<dyn Error>> {
         let ast = sysy::CompUnitParser::new().parse(&source_code).unwrap();
+        println!("{:#?}", ast);
         self.visit_comp_unit(&ast);
         Ok(&self.program)
     }

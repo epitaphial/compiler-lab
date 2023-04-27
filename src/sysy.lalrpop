@@ -119,29 +119,40 @@ BlockItem:ast::BlockItem = {
 
 // Stmt ::= MatchedStmt | UnmatchedStmt
 Stmt:ast::Stmt = {
-    RetStmt => ast::Stmt::RetStmt(<>),
+    MatchedStmt => <>,
+    UnmatchedStmt => <>,
+};
+
+// MatchedStmt ::= AssignStmt
+// | ExpStmt
+// | BlockStmt
+// | BreakStmt//TODO
+// | ContinueStmt//TODO
+// | RetStmt
+// | "if" "(" Exp ")" MatchedStmt "else" MatchedStmt
+// | "while" "(" Exp ")" MatchedStmt;//TODO
+MatchedStmt:ast::Stmt = {
     AssignStmt => ast::Stmt::AssignStmt(<>),
     ExpStmt => ast::Stmt::ExpStmt(<>),
     BlockStmt => ast::Stmt::BlockStmt(<>),
-};
-
-// MatchedStmt ::= LVal "=" Exp ";"
-// | [Exp] ";"
-// | Block
-// | "break" ";"
-// | "continue" ";"
-// | "return" [Exp] ";"
-// | "if" "(" Exp ")" MatchedStmt "else" MatchedStmt
-// | "while" "(" Exp ")" MatchedStmt;
-MatchedStmt:ast::Stmt = {
-
+    RetStmt => ast::Stmt::RetStmt(<>),
+    "if" "(" <cond_exp:Exp> ")" <then_stmt:MatchedStmt> "else" <else_stmt:MatchedStmt> =>{
+        ast::Stmt::IfStmt(Box::new(ast::IfStmt{cond_exp,then_stmt,else_stmt:Some(else_stmt)}))
+    },
 };
 
 // UnmatchedStmt ::= "if" "(" Exp ")" Stmt
 // | "if" "(" Exp ")" MatchedStmt "else" UnmatchedStmt
+// | "while" "(" Exp ")" UnmatchedStmt;//TODO
 UnmatchedStmt:ast::Stmt = {
-
+    "if" "(" <cond_exp:Exp> ")" <then_stmt:Stmt> =>{
+        ast::Stmt::IfStmt(Box::new(ast::IfStmt{cond_exp,then_stmt,else_stmt:None}))
+    },
+    "if" "(" <cond_exp:Exp> ")" <then_stmt:MatchedStmt> "else" <else_stmt:UnmatchedStmt> =>{
+        ast::Stmt::IfStmt(Box::new(ast::IfStmt{cond_exp,then_stmt,else_stmt:Some(else_stmt)}))
+    },
 };
+
 
 // BlockStmt ::= Block;
 BlockStmt:ast::BlockStmt = {

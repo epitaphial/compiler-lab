@@ -150,7 +150,7 @@ pub struct ExpStmt {
 pub struct IfStmt {
     pub cond_exp:Exp,
     pub then_stmt:Stmt,
-    pub else_stmt:Stmt,
+    pub else_stmt:Option<Stmt>,
 }
 
 // AssignStmt ::= LVal "=" Exp ";"
@@ -255,6 +255,7 @@ pub trait Visitor<T, V> {
     fn visit_block(&mut self, block: &Block, v: V) -> T;
     fn visit_block_item(&mut self, block_item: &BlockItem, v: V) -> T;
     fn visit_stmt(&mut self, stmt: &Stmt, v: V) -> T;
+    fn visit_if_stmt(&mut self, if_stmt: &IfStmt, v: V) -> T;
     fn visit_block_stmt(&mut self, block_stmt: &BlockStmt, v: V) -> T;
     fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, v: V) -> T;
     fn visit_exp_stmt(&mut self, exp_stmt: &ExpStmt, v: V) -> T;
