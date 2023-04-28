@@ -1,22 +1,14 @@
-fun @main(): i32 {
+fun @fib(): i32 {
 %entry:
   %0 = alloc i32
-  store 10, %0
   %1 = load %0
-  %2 = gt %1, 1
-  br %2, %bb0, %bb3
+  br %1, %bb0, %bb1
 
 %bb0:
-  %3 = load %0
-  %4 = gt %3, 1
-  br %4, %bb1, %bb2
+  store 5, %0
+  jump %bb1
 
 %bb1:
-  ret 0
-
-%bb2:
-  jump %bb0
-
-%bb3:
-  ret 1
+  %2 = load %0
+  ret %2
 }

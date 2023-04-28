@@ -1,8 +1,10 @@
-int main()
+int fib()
 {
-  int a = 10;
-  if (a > 1)
-    if (a > 1)
-      return 0;
-  return 1;
+    int a;
+    if(a)
+    
+a=5;
+    
+    
+    return a;
 }

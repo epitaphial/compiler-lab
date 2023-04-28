@@ -115,7 +115,8 @@ enum VisitRetType {
 #[derive(Debug, Clone)]
 enum VisitType {
     Global,
-    Local(Function, BasicBlock, Rc<BlockNode>),
+    // the second BasicBlock is last if's end BasicBlock
+    Local(Function, BasicBlock, Rc<BlockNode>,Option<BasicBlock>),
 }
 
 macro_rules! funcdata {
@@ -222,7 +223,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 unimplemented!()
             }
-            VisitType::Local(_function, _bb, bn) => {
+            VisitType::Local(_function, _bb, bn,_) => {
                 if const_def.const_exps.len() == 0 {
                     if let VisitRetType::Value(value) =
                         self.visit_const_init_val(&const_def.const_init_val, visit_type)
@@ -246,7 +247,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     ) -> VisitRetType {
         match visit_type.clone() {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(_function, _bb, _bn) => match cons_init_val {
+            VisitType::Local(_function, _bb, _bn,_) => match cons_init_val {
                 ast::ConstInitVal::ConstExp(const_exp) => {
                     self.visit_const_exp(const_exp, visit_type)
                 }
@@ -268,7 +269,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_var_def(&mut self, var_def: &ast::VarDef, visit_type: VisitType) -> VisitRetType {
         match visit_type.clone() {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(function, bb, bn) => {
+            VisitType::Local(function, bb, bn,_) => {
                 match var_def {
                     // with no initial vals
                     ast::VarDef::VarDef(var_ident, const_exps) => {
@@ -309,7 +310,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_init_val(&mut self, init_val: &ast::InitVal, visit_type: VisitType) -> VisitRetType {
         match visit_type.clone() {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(_function, _bb, _bn) => match init_val {
+            VisitType::Local(_function, _bb, _bn,_) => match init_val {
                 ast::InitVal::Exp(exp) => self.visit_exp(exp, visit_type),
                 ast::InitVal::InitVal(_init_val) => unimplemented!(),
             },
@@ -338,7 +339,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         let block_node = BlockNode::new(); // maybe consider param symbols...
         self.visit_block(
             &func_def.block,
-            VisitType::Local(function, entry_bb, block_node),
+            VisitType::Local(function, entry_bb, block_node,None),
         );
         VisitRetType::None
     }
@@ -348,12 +349,12 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 panic!("Can not in global scope!")
             }
-            VisitType::Local(function, _bb, bn) => {
+            VisitType::Local(function, _bb, bn,last_bb) => {
                 let mut visit_type = visit_type.clone();
                 for block_item in &block.block_items {
                     let visit_ret_type = self.visit_block_item(block_item, visit_type.clone());
                     if let VisitRetType::BasicBlock(end_bb) = visit_ret_type {
-                        visit_type = VisitType::Local(function, end_bb, bn.clone());
+                        visit_type = VisitType::Local(function, end_bb, bn.clone(),last_bb);
                     }
                 }
                 VisitRetType::None
@@ -388,23 +389,28 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 panic!("Can not be {:#?}", visit_type)
             }
-            VisitType::Local(function, bb, bn) => {
+            VisitType::Local(function, bb, bn,last_bb) => {
                 if let VisitRetType::Value(exp_value) =
                     self.visit_exp(&if_stmt.cond_exp, visit_type.clone())
                 {
                     if let Some(else_stmt) = &if_stmt.else_stmt {
                         let then_bb_lable = self.get_bb_number().to_string();
                         let else_bb_lable = self.get_bb_number().to_string();
-                        
+                        let end_bb_lable = self.get_bb_number().to_string();
                         let func_data = funcdata!(self, function);
                         let then_bb = basicblock!(func_data, then_bb_lable);
                         self.bb_flow_change.insert(then_bb, BBFlowStatus::PushEnable(None));
                         let else_bb = basicblock!(func_data, else_bb_lable);
                         self.bb_flow_change.insert(else_bb, BBFlowStatus::PushEnable(None));
-
-                        let then_visit_type = VisitType::Local(function, then_bb, bn.clone());
-                        let else_visit_type = VisitType::Local(function, else_bb, bn.clone());
-                        insertbb!(func_data, [then_bb, else_bb]);
+                        let end_bb = basicblock!(func_data, end_bb_lable);
+                        if let Some(last_bb) = last_bb{
+                            self.bb_flow_change.insert(end_bb,BBFlowStatus::PushEnable(Some((function,last_bb))));
+                        }else{
+                            self.bb_flow_change.insert(end_bb, BBFlowStatus::PushEnable(None));
+                        }
+                        let then_visit_type = VisitType::Local(function, then_bb, bn.clone(),Some(end_bb));
+                        let else_visit_type = VisitType::Local(function, else_bb, bn.clone(),Some(end_bb));
+                        insertbb!(func_data, [then_bb, else_bb,end_bb]);
 
                         let br_value = value!(func_data, branch, exp_value, then_bb, else_bb);
                         insertvalue!(self, func_data, bb, [br_value]);
@@ -414,13 +420,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                         self.visit_stmt(else_stmt, else_visit_type);
 
                         // insert jump to end_bb
-                        let end_bb_lable = self.get_bb_number().to_string();
-
                         let func_data = funcdata!(self, function);
-                        let end_bb = basicblock!(func_data, end_bb_lable);
-                        self.bb_flow_change.insert(end_bb, BBFlowStatus::PushEnable(Some((function,bb))));
-                        insertbb!(func_data, [end_bb]);
-
                         let then_jmp_value = value!(func_data, jump, end_bb);
                         insertvalue!(self, func_data, then_bb, [then_jmp_value]);
                         self.bb_flow_change.insert(then_bb, BBFlowStatus::PushDisable);
@@ -430,19 +430,24 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                         VisitRetType::BasicBlock(end_bb)
                     } else {
                         let then_bb_lable = self.get_bb_number();
+                        let end_bb_lable = self.get_bb_number().to_string();
+
                         let func_data = funcdata!(self, function);
                         let then_bb = basicblock!(func_data, then_bb_lable);
                         self.bb_flow_change.insert(then_bb, BBFlowStatus::PushEnable(None));
-                        let then_visit_type = VisitType::Local(function, then_bb, bn.clone());
-                        insertbb!(func_data, [then_bb]);
+                        let end_bb = basicblock!(func_data, end_bb_lable);
+                        if let Some(last_bb) = last_bb{
+                            self.bb_flow_change.insert(end_bb,BBFlowStatus::PushEnable(Some((function,last_bb))));
+                        }else{
+                            self.bb_flow_change.insert(end_bb, BBFlowStatus::PushEnable(None));
+                        }
+
+                        let then_visit_type = VisitType::Local(function, then_bb, bn.clone(),Some(end_bb));
+                        insertbb!(func_data, [then_bb,end_bb]);
 
                         self.visit_stmt(&if_stmt.then_stmt, then_visit_type);
                         // insert jump to end_bb
-                        let end_bb_lable = self.get_bb_number();
                         let func_data = funcdata!(self, function);
-                        let end_bb = basicblock!(func_data, end_bb_lable);
-                        self.bb_flow_change.insert(end_bb, BBFlowStatus::PushEnable(Some((function,bb))));
-                        insertbb!(func_data, [end_bb]);
                         
                         let br_value = value!(func_data, branch, exp_value, then_bb, end_bb);
                         insertvalue!(self, func_data, bb, [br_value]);
@@ -469,10 +474,10 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 panic!("Can not be {:#?}", visit_type)
             }
-            VisitType::Local(function, bb, bn) => {
+            VisitType::Local(function, bb, bn,last_bb) => {
                 let new_node = BlockNode::new();
                 BlockNode::insert_block(bn.clone(), new_node.clone());
-                let visit_type = VisitType::Local(function, bb, new_node);
+                let visit_type = VisitType::Local(function, bb, new_node,last_bb);
                 self.visit_block(&block_stmt.block, visit_type)
             }
         }
@@ -485,7 +490,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     ) -> VisitRetType {
         match visit_type.clone() {
             VisitType::Global => panic!("Value can not be {:#?}", visit_type),
-            VisitType::Local(function, bb, _bn) => {
+            VisitType::Local(function, bb, _bn,_) => {
                 if let Some(exp) = &ret_stmt.exp {
                     match self.visit_exp(exp, visit_type) {
                         VisitRetType::Value(value) => {
@@ -516,7 +521,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 panic!("Can not be {:#?}", visit_type)
             }
-            VisitType::Local(_, _, _) => {
+            VisitType::Local(_, _, _,_) => {
                 if let Some(exp) = &exp_stmt.exp {
                     self.visit_exp(exp, visit_type);
                 }
@@ -534,7 +539,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 panic!("Value can not be {:#?}", visit_type)
             }
-            VisitType::Local(function, bb, bn) => {
+            VisitType::Local(function, bb, bn,_) => {
                 if let VisitRetType::Value(value) = self.visit_exp(&ass_stmt.exp, visit_type) {
                     let ass_l_value = bn.lookup_symbol(&ass_stmt.l_val.ident);
                     let func_data = funcdata!(self, function);
@@ -555,7 +560,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 unimplemented!()
             }
-            VisitType::Local(function, bb, bn) => {
+            VisitType::Local(function, bb, bn,_) => {
                 let value = bn.lookup_symbol(&l_val.ident);
                 let func_data = funcdata!(self, function);
                 let value_data = getvaluedata!(func_data, value);
@@ -578,7 +583,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         // should check if it is a const...
         match visit_type.clone() {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(function, _bb, _bn) => {
+            VisitType::Local(function, _bb, _bn,_) => {
                 let const_value = self.visit_exp(&const_exp.exp, visit_type.clone());
                 if let VisitRetType::Value(value) = const_value {
                     let func_data = funcdata!(self, function);
@@ -601,14 +606,14 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_exp(&mut self, exp: &crate::ast::Exp, visit_type: VisitType) -> VisitRetType {
         match visit_type {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(_function, _bb, _) => self.visit_l_or_exp(&exp.l_or_exp, visit_type),
+            VisitType::Local(_function, _bb, _,_) => self.visit_l_or_exp(&exp.l_or_exp, visit_type),
         }
     }
 
     fn visit_l_or_exp(&mut self, l_or_exp: &ast::LOrExp, visit_type: VisitType) -> VisitRetType {
         match visit_type {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(function, bb, _) => {
+            VisitType::Local(function, bb, _,_) => {
                 match l_or_exp {
                     LOrExp::LAndExp(l_and_exp) => self.visit_l_and_exp(l_and_exp, visit_type),
                     LOrExp::BinaryOp(l_or_exp, l_and_exp) => {
@@ -650,7 +655,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_l_and_exp(&mut self, l_and_exp: &ast::LAndExp, visit_type: VisitType) -> VisitRetType {
         match visit_type {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(function, bb, _) => {
+            VisitType::Local(function, bb, _,_) => {
                 match l_and_exp {
                     LAndExp::EqExp(eq_exp) => self.visit_eq_exp(eq_exp, visit_type),
                     LAndExp::BinaryOp(l_and_exp, eq_exp) => {
@@ -697,7 +702,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_eq_exp(&mut self, eq_exp: &ast::EqExp, visit_type: VisitType) -> VisitRetType {
         match visit_type {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(function, bb, _) => {
+            VisitType::Local(function, bb, _,_) => {
                 match eq_exp {
                     EqExp::RelExp(rel_exp) => self.visit_rel_exp(rel_exp, visit_type),
                     EqExp::BinaryOp(eq_exp, op, rel_exp) => match op {
@@ -778,7 +783,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_rel_exp(&mut self, rel_exp: &ast::RelExp, visit_type: VisitType) -> VisitRetType {
         match visit_type {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(function, bb, _) => {
+            VisitType::Local(function, bb, _,_) => {
                 match rel_exp {
                     RelExp::AddExp(add_exp) => self.visit_add_exp(add_exp, visit_type),
                     RelExp::BinaryOp(rel_exp, op, add_exp) => match op {
@@ -914,7 +919,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     fn visit_add_exp(&mut self, add_exp: &ast::AddExp, visit_type: VisitType) -> VisitRetType {
         match visit_type {
             VisitType::Global => unimplemented!(),
-            VisitType::Local(function, bb, _) => match add_exp {
+            VisitType::Local(function, bb, _,_) => match add_exp {
                 AddExp::MulExp(mul_exp) => self.visit_mul_exp(mul_exp, visit_type),
                 AddExp::BinaryOp(add_exp, op, mul_exp) => match op {
                     Operator::Add => {
@@ -984,7 +989,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 unimplemented!()
             }
-            VisitType::Local(function, bb, _) => {
+            VisitType::Local(function, bb, _,_) => {
                 match mul_exp {
                     MulExp::UnaryExp(unary_exp) => self.visit_unary_exp(unary_exp, visit_type),
                     MulExp::BinaryOp(mul_exp, op, unary_exp) => match op {
@@ -1087,7 +1092,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
             VisitType::Global => {
                 unimplemented!()
             }
-            VisitType::Local(function, bb, _) => {
+            VisitType::Local(function, bb, _,_) => {
                 match unary_exp {
                     UnaryExp::PrimaryExp(primary_exp) => {
                         self.visit_primary_exp(primary_exp, visit_type)
@@ -1190,7 +1195,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                 //     }
                 // }
             }
-            VisitType::Local(function, _, _) => match primary_exp {
+            VisitType::Local(function, _, _,_) => match primary_exp {
                 PrimaryExp::Exp(exp) => self.visit_exp(exp, visit_type),
                 PrimaryExp::Number(number) => match number {
                     Number::IntConst(int_const) => {
@@ -1223,11 +1228,11 @@ impl Parser {
         let ast = sysy::CompUnitParser::new().parse(&source_code).unwrap();
         println!("{:#?}", ast);
         self.visit_comp_unit(&ast);
-        self.add_jump_to_bb();
+        self.add_end_jump_to_bb();
         Ok(&self.program)
     }
 
-    fn add_jump_to_bb(&mut self){
+    fn add_end_jump_to_bb(&mut self){
         for (bb,bb_status) in &self.bb_flow_change{
             if let BBFlowStatus::PushEnable(ori_bb) = bb_status{
                 if let Some((function,ori_bb)) = ori_bb{
