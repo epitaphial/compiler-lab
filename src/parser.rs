@@ -95,8 +95,15 @@ impl BlockNode {
 //     }
 // }
 
+enum BBFlowStatus {
+    PushEnable(Option<(Function,BasicBlock)>),// Need to jump back to original bb?
+    PushDisable,
+}
+
 pub struct Parser {
-    pub program: Program,
+    program: Program,
+    bb_number: u32,
+    bb_flow_change: HashMap<BasicBlock, BBFlowStatus>,
 }
 
 enum VisitRetType {
@@ -142,8 +149,11 @@ macro_rules! value {
 // }
 
 macro_rules! insertvalue {
-    ($func:ident,$bb:expr,$values:expr) => {
-        $func.layout_mut().bb_mut($bb).insts_mut().extend($values)
+    ($self:ident,$func:ident,$bb:expr,$values:expr) => {
+        // Eliminate redundant instructions after the ret instruction
+        if matches!($self.bb_flow_change.get(&$bb).unwrap(),BBFlowStatus::PushEnable(_)){
+            $func.layout_mut().bb_mut($bb).insts_mut().extend($values)
+        }
     };
 }
 
@@ -265,7 +275,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                         if const_exps.len() == 0 {
                             let func_data = funcdata!(self, function);
                             let alloc = value!(func_data, alloc, Type::get(TypeKind::Int32));
-                            insertvalue!(func_data, bb, [alloc]);
+                            insertvalue!(self, func_data, bb, [alloc]);
                             bn.insert_symbol(var_ident.clone(), alloc);
                             VisitRetType::Value(alloc)
                         } else {
@@ -281,7 +291,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 let func_data = funcdata!(self, function);
                                 let alloc = value!(func_data, alloc, Type::get(TypeKind::Int32));
                                 let store = value!(func_data, store, value, alloc);
-                                insertvalue!(func_data, bb, [alloc, store]);
+                                insertvalue!(self, func_data, bb, [alloc, store]);
                                 bn.insert_symbol(var_ident.clone(), alloc);
                                 VisitRetType::Value(alloc)
                             } else {
@@ -323,6 +333,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
         };
         let func_data = funcdata!(self, function);
         let entry_bb = basicblock!(func_data, "%entry".into());
+        self.bb_flow_change.insert(entry_bb, BBFlowStatus::PushEnable(None));
         insertbb!(func_data, [entry_bb]);
         let block_node = BlockNode::new(); // maybe consider param symbols...
         self.visit_block(
@@ -333,10 +344,21 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     }
 
     fn visit_block(&mut self, block: &crate::ast::Block, visit_type: VisitType) -> VisitRetType {
-        for block_item in &block.block_items {
-            self.visit_block_item(block_item, visit_type.clone());
+        match visit_type.clone() {
+            VisitType::Global => {
+                panic!("Can not in global scope!")
+            }
+            VisitType::Local(function, _bb, bn) => {
+                let mut visit_type = visit_type.clone();
+                for block_item in &block.block_items {
+                    let visit_ret_type = self.visit_block_item(block_item, visit_type.clone());
+                    if let VisitRetType::BasicBlock(end_bb) = visit_ret_type {
+                        visit_type = VisitType::Local(function, end_bb, bn.clone());
+                    }
+                }
+                VisitRetType::None
+            }
         }
-        VisitRetType::None
     }
 
     fn visit_block_item(
@@ -361,20 +383,81 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
     }
 
     fn visit_if_stmt(&mut self, if_stmt: &ast::IfStmt, visit_type: VisitType) -> VisitRetType {
-        // 1. deal with exp; 2. new bb for then; 3. new bb for else; 4. new bb for end; 5. add jmp from then and else to end, and dont forget to change folowing block item's bb.
+        // 1. deal with exp; 2. new bb for then; 3. new bb for else; 4. new bb for end; 5. add jmp from then and else to end, and dont forget to change folowing block item's bb, and jump back to original bb.
         match visit_type.clone() {
             VisitType::Global => {
                 panic!("Can not be {:#?}", visit_type)
             }
             VisitType::Local(function, bb, bn) => {
-                if let VisitRetType::Value(exp_value) = self.visit_exp(&if_stmt.cond_exp, visit_type)  {
-                    
-                }else{
+                if let VisitRetType::Value(exp_value) =
+                    self.visit_exp(&if_stmt.cond_exp, visit_type.clone())
+                {
+                    if let Some(else_stmt) = &if_stmt.else_stmt {
+                        let then_bb_lable = self.get_bb_number().to_string();
+                        let else_bb_lable = self.get_bb_number().to_string();
+                        
+                        let func_data = funcdata!(self, function);
+                        let then_bb = basicblock!(func_data, then_bb_lable);
+                        self.bb_flow_change.insert(then_bb, BBFlowStatus::PushEnable(None));
+                        let else_bb = basicblock!(func_data, else_bb_lable);
+                        self.bb_flow_change.insert(else_bb, BBFlowStatus::PushEnable(None));
+
+                        let then_visit_type = VisitType::Local(function, then_bb, bn.clone());
+                        let else_visit_type = VisitType::Local(function, else_bb, bn.clone());
+                        insertbb!(func_data, [then_bb, else_bb]);
+
+                        let br_value = value!(func_data, branch, exp_value, then_bb, else_bb);
+                        insertvalue!(self, func_data, bb, [br_value]);
+                        self.bb_flow_change.insert(bb, BBFlowStatus::PushDisable);
+
+                        self.visit_stmt(&if_stmt.then_stmt, then_visit_type);
+                        self.visit_stmt(else_stmt, else_visit_type);
+
+                        // insert jump to end_bb
+                        let end_bb_lable = self.get_bb_number().to_string();
+
+                        let func_data = funcdata!(self, function);
+                        let end_bb = basicblock!(func_data, end_bb_lable);
+                        self.bb_flow_change.insert(end_bb, BBFlowStatus::PushEnable(Some((function,bb))));
+                        insertbb!(func_data, [end_bb]);
+
+                        let then_jmp_value = value!(func_data, jump, end_bb);
+                        insertvalue!(self, func_data, then_bb, [then_jmp_value]);
+                        self.bb_flow_change.insert(then_bb, BBFlowStatus::PushDisable);
+                        let else_jmp_value = value!(func_data, jump, end_bb);
+                        insertvalue!(self, func_data, else_bb, [else_jmp_value]);
+                        self.bb_flow_change.insert(else_bb, BBFlowStatus::PushDisable);
+                        VisitRetType::BasicBlock(end_bb)
+                    } else {
+                        let then_bb_lable = self.get_bb_number();
+                        let func_data = funcdata!(self, function);
+                        let then_bb = basicblock!(func_data, then_bb_lable);
+                        self.bb_flow_change.insert(then_bb, BBFlowStatus::PushEnable(None));
+                        let then_visit_type = VisitType::Local(function, then_bb, bn.clone());
+                        insertbb!(func_data, [then_bb]);
+
+                        self.visit_stmt(&if_stmt.then_stmt, then_visit_type);
+                        // insert jump to end_bb
+                        let end_bb_lable = self.get_bb_number();
+                        let func_data = funcdata!(self, function);
+                        let end_bb = basicblock!(func_data, end_bb_lable);
+                        self.bb_flow_change.insert(end_bb, BBFlowStatus::PushEnable(Some((function,bb))));
+                        insertbb!(func_data, [end_bb]);
+                        
+                        let br_value = value!(func_data, branch, exp_value, then_bb, end_bb);
+                        insertvalue!(self, func_data, bb, [br_value]);
+                        self.bb_flow_change.insert(bb, BBFlowStatus::PushDisable);
+
+                        let then_jmp_value = value!(func_data, jump, end_bb);
+                        insertvalue!(self, func_data, then_bb, [then_jmp_value]);
+                        self.bb_flow_change.insert(then_bb, BBFlowStatus::PushDisable);
+                        VisitRetType::BasicBlock(end_bb)
+                    }
+                } else {
                     panic!("Condition must be a expresson")
                 }
             }
         }
-        VisitRetType::None
     }
 
     fn visit_block_stmt(
@@ -408,7 +491,8 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                         VisitRetType::Value(value) => {
                             let func_data = funcdata!(self, function);
                             let ret = value!(func_data, ret, Some(value));
-                            insertvalue!(func_data, bb, [ret]);
+                            insertvalue!(self, func_data, bb, [ret]);
+                            self.bb_flow_change.insert(bb, BBFlowStatus::PushDisable);
                         }
                         VisitRetType::None => {
                             panic!("Return exp value can not be VisitRetType::None!")
@@ -420,7 +504,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                 } else {
                     let func_data = funcdata!(self, function);
                     let ret = value!(func_data, ret, None);
-                    insertvalue!(func_data, bb, [ret]);
+                    insertvalue!(self, func_data, bb, [ret]);
                 }
             }
         }
@@ -456,7 +540,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                     let func_data = funcdata!(self, function);
                     // must do some type check, because we can't assign to a const!
                     let store = value!(func_data, store, value, ass_l_value);
-                    insertvalue!(func_data, bb, [store]);
+                    insertvalue!(self, func_data, bb, [store]);
                 } else {
                     panic!()
                 }
@@ -477,7 +561,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                 let value_data = getvaluedata!(func_data, value);
                 if matches!(value_data.kind(), ValueKind::Alloc(_)) {
                     let load = value!(func_data, load, value);
-                    insertvalue!(func_data, bb, [load]);
+                    insertvalue!(self, func_data, bb, [load]);
                     VisitRetType::Value(load)
                 } else {
                     VisitRetType::Value(value)
@@ -551,7 +635,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 let or = value!(func_data, binary, BinaryOp::Or, l_value, r_value);
                                 let zero_value = value!(func_data, integer, 0);
                                 let eq = value!(func_data, binary, BinaryOp::NotEq, or, zero_value);
-                                insertvalue!(func_data, bb, [or, eq]);
+                                insertvalue!(self, func_data, bb, [or, eq]);
                                 VisitRetType::Value(eq)
                             }
                         } else {
@@ -598,7 +682,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 let and = value!(func_data, binary, BinaryOp::And, neq_l, neq_r);
                                 let neq =
                                     value!(func_data, binary, BinaryOp::NotEq, and, zero_value);
-                                insertvalue!(func_data, bb, [neq_l, neq_r, and, neq]);
+                                insertvalue!(self, func_data, bb, [neq_l, neq_r, and, neq]);
                                 VisitRetType::Value(neq)
                             }
                         } else {
@@ -640,7 +724,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let eq =
                                         value!(func_data, binary, BinaryOp::Eq, l_value, r_value);
-                                    insertvalue!(func_data, bb, [eq]);
+                                    insertvalue!(self, func_data, bb, [eq]);
                                     VisitRetType::Value(eq)
                                 }
                             } else {
@@ -675,7 +759,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                         l_value,
                                         r_value
                                     );
-                                    insertvalue!(func_data, bb, [not_eq]);
+                                    insertvalue!(self, func_data, bb, [not_eq]);
                                     VisitRetType::Value(not_eq)
                                 }
                             } else {
@@ -721,7 +805,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let lt =
                                         value!(func_data, binary, BinaryOp::Lt, l_value, r_value);
-                                    insertvalue!(func_data, bb, [lt]);
+                                    insertvalue!(self, func_data, bb, [lt]);
                                     VisitRetType::Value(lt)
                                 }
                             } else {
@@ -751,7 +835,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let mt =
                                         value!(func_data, binary, BinaryOp::Gt, l_value, r_value);
-                                    insertvalue!(func_data, bb, [mt]);
+                                    insertvalue!(self, func_data, bb, [mt]);
                                     VisitRetType::Value(mt)
                                 }
                             } else {
@@ -781,7 +865,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let le =
                                         value!(func_data, binary, BinaryOp::Le, l_value, r_value);
-                                    insertvalue!(func_data, bb, [le]);
+                                    insertvalue!(self, func_data, bb, [le]);
                                     VisitRetType::Value(le)
                                 }
                             } else {
@@ -811,7 +895,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let me =
                                         value!(func_data, binary, BinaryOp::Ge, l_value, r_value);
-                                    insertvalue!(func_data, bb, [me]);
+                                    insertvalue!(self, func_data, bb, [me]);
                                     VisitRetType::Value(me)
                                 }
                             } else {
@@ -853,7 +937,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                             } else {
                                 let add =
                                     value!(func_data, binary, BinaryOp::Add, l_value, r_value);
-                                insertvalue!(func_data, bb, [add]);
+                                insertvalue!(self, func_data, bb, [add]);
                                 VisitRetType::Value(add)
                             }
                         } else {
@@ -880,7 +964,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                             } else {
                                 let sub =
                                     value!(func_data, binary, BinaryOp::Sub, l_value, r_value);
-                                insertvalue!(func_data, bb, [sub]);
+                                insertvalue!(self, func_data, bb, [sub]);
                                 VisitRetType::Value(sub)
                             }
                         } else {
@@ -924,7 +1008,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let mul =
                                         value!(func_data, binary, BinaryOp::Mul, l_value, r_value);
-                                    insertvalue!(func_data, bb, [mul]);
+                                    insertvalue!(self, func_data, bb, [mul]);
                                     VisitRetType::Value(mul)
                                 }
                             } else {
@@ -951,7 +1035,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let div =
                                         value!(func_data, binary, BinaryOp::Div, l_value, r_value);
-                                    insertvalue!(func_data, bb, [div]);
+                                    insertvalue!(self, func_data, bb, [div]);
                                     VisitRetType::Value(div)
                                 }
                             } else {
@@ -978,7 +1062,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                 } else {
                                     let mod_value =
                                         value!(func_data, binary, BinaryOp::Mod, l_value, r_value);
-                                    insertvalue!(func_data, bb, [mod_value]);
+                                    insertvalue!(self, func_data, bb, [mod_value]);
                                     VisitRetType::Value(mod_value)
                                 }
                             } else {
@@ -1033,7 +1117,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                             zero_value,
                                             value
                                         );
-                                        insertvalue!(func_data, bb, [sub]);
+                                        insertvalue!(self, func_data, bb, [sub]);
                                         VisitRetType::Value(sub)
                                     }
                                 }
@@ -1067,7 +1151,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                                             zero_value,
                                             value
                                         );
-                                        insertvalue!(func_data, bb, [eq]);
+                                        insertvalue!(self, func_data, bb, [eq]);
                                         VisitRetType::Value(eq)
                                     }
                                 }
@@ -1125,13 +1209,34 @@ impl Parser {
     pub fn new() -> Parser {
         Parser {
             program: Program::new(),
+            bb_number: 0,
+            bb_flow_change: HashMap::new(),
         }
     }
+
+    pub fn get_bb_number(&mut self) -> String {
+        self.bb_number += 1;
+        format!("%bb{}", self.bb_number - 1)
+    }
+
     pub fn parse(&mut self, source_code: &String) -> Result<&Program, Box<dyn Error>> {
         let ast = sysy::CompUnitParser::new().parse(&source_code).unwrap();
         println!("{:#?}", ast);
         self.visit_comp_unit(&ast);
+        self.add_jump_to_bb();
         Ok(&self.program)
+    }
+
+    fn add_jump_to_bb(&mut self){
+        for (bb,bb_status) in &self.bb_flow_change{
+            if let BBFlowStatus::PushEnable(ori_bb) = bb_status{
+                if let Some((function,ori_bb)) = ori_bb{
+                    let func_data = funcdata!(self,*function);
+                    let jump_value = value!(func_data,jump,*ori_bb);
+                    insertvalue!(self,func_data,*bb,[jump_value]);
+                }
+            }
+        }
     }
 
     pub fn gen_ir(&self, output_name: &String) -> Result<(), Box<dyn Error>> {
