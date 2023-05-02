@@ -3,25 +3,25 @@ fun @fib(): i32 {
   %0 = alloc i32
   %1 = alloc i32
   %2 = load %1
-  br %2, %bb0, %bb1
+  %3 = ne 0, 0
+  %4 = ne %2, 0
+  %5 = and %3, %4
+  %6 = ne %5, 0
+  %7 = or 1, %6
+  %8 = ne %7, 0
+  %9 = or %8, 1
+  %10 = ne %9, 0
+  br %10, %bb0, %bb1
 
 %bb0:
-  %3 = load %1
-  br %3, %bb2, %bb3
+  store 1, %0
+  jump %end
 
 %bb1:
   store 0, %0
   jump %end
 
-%bb2:
-  store 1, %0
-  jump %end
-
-%bb3:
-  store 3, %0
-  jump %end
-
 %end:
-  %4 = load %0
-  ret %4
+  %11 = load %0
+  ret %11
 }

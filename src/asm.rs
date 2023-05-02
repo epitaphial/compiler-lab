@@ -30,7 +30,7 @@ impl AsmProgram {
             }
             for asm_bb in &asm_func.blocks {
                 if let BlockName::Other(bb_name) = &asm_bb.bb_name {
-                    asm_str.push_str(format!("{}:\n", bb_name).as_str());
+                    asm_str.push_str(format!("{}:\n", &bb_name[1..]).as_str());
                 }
                 for asm_insts in &asm_bb.insts {
                     for asm_inst in &asm_insts.insts_str {

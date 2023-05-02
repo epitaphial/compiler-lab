@@ -740,7 +740,7 @@ impl ast::Visitor<VisitRetType, VisitType> for Parser {
                             self.visit_l_or_exp(l_or_exp, visit_type.clone()),
                             self.visit_l_and_exp(l_and_exp, visit_type.clone()),
                         ) {
-                            // check if both lval and rval are const
+                            // check if both lval or rval are const
                             let l_val_data = getvaluedata!(self, function, l_value);
                             let r_val_data = getvaluedata!(self, function, r_value);
                             if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
