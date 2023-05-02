@@ -1,14 +1,27 @@
 fun @fib(): i32 {
 %entry:
   %0 = alloc i32
-  %1 = load %0
-  br %1, %bb0, %bb1
+  %1 = alloc i32
+  %2 = load %1
+  br %2, %bb0, %bb1
 
 %bb0:
-  store 5, %0
-  jump %bb1
+  %3 = load %1
+  br %3, %bb2, %bb3
 
 %bb1:
-  %2 = load %0
-  ret %2
+  store 0, %0
+  jump %end
+
+%bb2:
+  store 1, %0
+  jump %end
+
+%bb3:
+  store 3, %0
+  jump %end
+
+%end:
+  %4 = load %0
+  ret %4
 }

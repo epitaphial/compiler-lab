@@ -1,12 +1,11 @@
+mod asm;
 mod asmgen;
 mod ast;
 mod parser;
-mod asm;
 
 use std::{env, error::Error, fs};
 
 use parser::Parser;
-
 
 #[macro_use]
 extern crate lalrpop_util;
@@ -20,15 +19,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::File::create(output_name)?;
     let mut parser = Parser::new();
     match output_mode.as_str() {
-        "-koopa"=>{
+        "-koopa" => {
             parser.parse(&source_code)?;
             parser.gen_ir(output_name)?;
-        },
-        "-riscv"=>{
+        }
+        "-riscv" => {
             let program = parser.parse(&source_code)?;
             asmgen::gen_asm(&program, output_name);
-        },
-        _=>{},
+        }
+        _ => {}
     }
     Ok(())
 }

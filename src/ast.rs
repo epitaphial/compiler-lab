@@ -148,9 +148,9 @@ pub struct ExpStmt {
 // IfStmt := "if" "(" Exp ")" Stmt ["else" Stmt];
 #[derive(Debug)]
 pub struct IfStmt {
-    pub cond_exp:Exp,
-    pub then_stmt:Stmt,
-    pub else_stmt:Option<Stmt>,
+    pub cond_exp: Exp,
+    pub then_stmt: Stmt,
+    pub else_stmt: Option<Stmt>,
 }
 
 // AssignStmt ::= LVal "=" Exp ";"

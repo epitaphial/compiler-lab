@@ -194,6 +194,7 @@ impl AsmGenerator for ValueData {
                         asm_inst.push_inst(format!("lw a0, {}(sp)", pos));
                     }
                 }
+                asm_inst.push_inst(format!("addi sp, sp, {}", stack.get_stack_size()));
                 asm_inst.push_inst(format!("ret"));
             }
             ValueKind::Load(load) => {
@@ -225,6 +226,12 @@ impl AsmGenerator for ValueData {
                         panic!("Cant be this!")
                     }
                 }
+            }
+            ValueKind::Jump(_jump) => {
+                unimplemented!()
+            }
+            ValueKind::Branch(_branch) => {
+                unimplemented!()
             }
             ValueKind::Alloc(_) => {
                 stack.insert_value(*value, 4);
