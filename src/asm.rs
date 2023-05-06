@@ -75,6 +75,7 @@ impl Stack {
     }
 
     pub fn get_pos_by_value(&self, value: Value) -> u32 {
+        //println!("{:#?}",value);
         *self.stack_map.get(&value).unwrap()
     }
 

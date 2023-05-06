@@ -119,7 +119,6 @@ impl AsmGenerator for ValueData {
         stack: &mut Stack,
     ) -> AsmInstruction {
         let mut asm_inst = AsmInstruction::new();
-        //println!("{:#?}",stack.get_stack_size());
         match self.kind() {
             ValueKind::Binary(bin) => {
                 let lhs_value = self.get_value(func_data, &bin.lhs(), stack);
@@ -208,8 +207,8 @@ impl AsmGenerator for ValueData {
                 stack.insert_value(*value, 4);
             }
             ValueKind::Store(store) => {
-                let dest_value = self.get_value(func_data, &store.dest(), stack);
                 let src_value = self.get_value(func_data, &store.value(), stack);
+                let dest_value = self.get_value(func_data, &store.dest(), stack);
                 match dest_value {
                     AsmValue::StackPos(dest_pos) => {
                         match src_value {

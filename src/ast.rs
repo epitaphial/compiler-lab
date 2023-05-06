@@ -241,34 +241,3 @@ pub enum PrimaryExp {
 pub enum Number {
     IntConst(i32),
 }
-
-pub trait Visitor<T, V> {
-    fn visit_comp_unit(&mut self, comp_unit: &CompUnit) -> T;
-    fn visit_decl(&mut self, decl: &Decl, v: V) -> T;
-    fn visit_const_decl(&mut self, const_decl: &ConstDecl, v: V) -> T;
-    fn visit_const_def(&mut self, const_def: &ConstDef, v: V) -> T;
-    fn visit_const_init_val(&mut self, cons_init_val: &ConstInitVal, v: V) -> T;
-    fn visit_var_decl(&mut self, var_decl: &VarDecl, v: V) -> T;
-    fn visit_var_def(&mut self, var_def: &VarDef, v: V) -> T;
-    fn visit_init_val(&mut self, init_val: &InitVal, v: V) -> T;
-    fn visit_func_def(&mut self, func_def: &FuncDef) -> T;
-    fn visit_block(&mut self, block: &Block, v: V) -> T;
-    fn visit_block_item(&mut self, block_item: &BlockItem, v: V) -> T;
-    fn visit_stmt(&mut self, stmt: &Stmt, v: V) -> T;
-    fn visit_if_stmt(&mut self, if_stmt: &IfStmt, v: V) -> T;
-    fn visit_block_stmt(&mut self, block_stmt: &BlockStmt, v: V) -> T;
-    fn visit_ret_stmt(&mut self, ret_stmt: &RetStmt, v: V) -> T;
-    fn visit_exp_stmt(&mut self, exp_stmt: &ExpStmt, v: V) -> T;
-    fn visit_ass_stmt(&mut self, ass_stmt: &AssignStmt, v: V) -> T;
-    fn visit_l_val(&mut self, l_val: &LVal, v: V) -> T;
-    fn visit_const_exp(&mut self, const_exp: &ConstExp, v: V) -> T;
-    fn visit_exp(&mut self, exp: &Exp, v: V) -> T;
-    fn visit_l_or_exp(&mut self, l_or_exp: &LOrExp, v: V) -> T;
-    fn visit_l_and_exp(&mut self, l_and_exp: &LAndExp, v: V) -> T;
-    fn visit_eq_exp(&mut self, eq_exp: &EqExp, v: V) -> T;
-    fn visit_rel_exp(&mut self, rel_exp: &RelExp, v: V) -> T;
-    fn visit_add_exp(&mut self, add_exp: &AddExp, v: V) -> T;
-    fn visit_mul_exp(&mut self, mul_exp: &MulExp, v: V) -> T;
-    fn visit_unary_exp(&mut self, unary_exp: &UnaryExp, v: V) -> T;
-    fn visit_primary_exp(&mut self, primary_exp: &PrimaryExp, v: V) -> T;
-}

@@ -1,13 +1,9 @@
-int fib()
+int main()
 {
-    int a;
-    if (1||0&&a||31231&&2423)
-    {
-        return 1;
-    }
-    else
-    {
-        return 0;
-    }
-    return 9;
+  if (0||0)
+    return 1;
+  else
+    return 120;
+  return 3;
+  return 4;
 }
