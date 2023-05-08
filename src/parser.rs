@@ -67,9 +67,9 @@ impl BlockNode {
 
 #[derive(Debug)]
 enum BBStatus {
-    Pushable,     // Current bb is pushable
-    Branched,     // Current bb already branched or jumped or returned, and can not push more value
-    JumpToLastIf, // Current bb is pushable, but can only push value before the jump value. In the end of an "end branch" bb of if statement, we need to jump back to last if's "end branch" basicblock, we need this(ugly design...), but if current end bb already has an end value, we dont need this field.
+    Pushable,         // Current bb is pushable
+    Branched, // Current bb already branched or jumped or returned, and can not push more value
+    JumpToLastNested, // Current bb is pushable, but can only push value before the jump value. In the end of an "end branch" bb of if statement or whilestatement, we need to jump back to last if's "end branch" basicblock or last while's "while entry branch" basicblock, we need this(ugly design...), but if current end bb already has an branch value(ret br jump...), we dont need this field.
 }
 
 pub struct Parser {
@@ -81,12 +81,13 @@ pub struct Parser {
 
 #[derive(Debug, Clone, Default)]
 struct Scope {
-    is_global: bool,                     // is in global scope?
-    function: Option<Function>,          // current function
-    basic_block: Option<BasicBlock>,     // current basicblock
-    block_node: Rc<BlockNode>,           // current blocknode, to determine the scope
-    last_if_bb: Option<BasicBlock>, // "end" basic block of last ifstatement, when in a if statement's end bb, we need to jump to last ifstatement's end bb. For example: if(a)if(b);
+    is_global: bool,                                // is in global scope?
+    function: Option<Function>,                     // current function
+    basic_block: Option<BasicBlock>,                // current basicblock
+    block_node: Rc<BlockNode>,                      // current blocknode, to determine the scope
+    last_nested_bb: Option<BasicBlock>, // 1."end" basic block of last ifstatement, when in a if or while statement's end bb, we need to jump to last ifstatement's end bb. For example: if(a)if(b); 2."while entry" basic block of last while statement, when in a if or while statement's end bb, we need to jump to last whilestatement's while entry bb.
     last_end_exp_bb: Option<BasicBlock>, // "end_exp" basic block of logic exp, when in a multi-layer logic expression bb, we need to jump to last exp's end_exp bb. For example: a||b&&c
+    curr_loop_bb: Option<(BasicBlock, BasicBlock)>, // current loop's while entry and while end, used for build continue and break.
 }
 
 impl Scope {
@@ -169,7 +170,7 @@ macro_rules! insertvalue {
                 .bb_mut($bb)
                 .insts_mut()
                 .extend($values),
-            BBStatus::JumpToLastIf => {
+            BBStatus::JumpToLastNested => {
                 for value in $values {
                     let mut has_branch = false;
                     if matches!(imvaluedata!($self, $func, value).kind(), ValueKind::Jump(_))
@@ -405,8 +406,9 @@ impl Parser {
             function: Some(function),
             basic_block: Some(entry_bb),
             block_node: block_node,
-            last_if_bb: None,
+            last_nested_bb: None,
             last_end_exp_bb: None,
+            curr_loop_bb: None,
         };
         self.visit_block(&func_def.block, &mut scope);
     }
@@ -442,7 +444,162 @@ impl Parser {
                 Stmt::ExpStmt(exp_stmt) => self.visit_exp_stmt(exp_stmt, scope),
                 Stmt::BlockStmt(block_stmt) => self.visit_block_stmt(block_stmt, scope),
                 Stmt::IfStmt(if_stmt) => self.visit_if_stmt(if_stmt, scope),
+                Stmt::WhileStmt(while_stmt) => self.visit_while_stmt(while_stmt, scope),
+                Stmt::BreakStmt => self.visit_break_stmt(scope),
+                Stmt::ContinueStmt => self.visit_continue_stmt(scope),
             }
+        }
+    }
+
+    fn visit_break_stmt(&mut self, scope: &mut Scope) {
+        if scope.is_global {
+            panic!("Break statement can not in global scope!")
+        } else {
+            if let Some((_, while_end_bb)) = scope.curr_loop_bb {
+                // jump to while end if encounter a break stmt
+                let jump_value = value!(self, scope.function.unwrap(), jump, while_end_bb);
+                insertvalue!(
+                    self,
+                    scope.function.unwrap(),
+                    scope.basic_block.unwrap(),
+                    [jump_value]
+                );
+                self.bbs_status
+                    .insert(scope.basic_block.unwrap(), BBStatus::Branched);
+
+                let break_end_bb_label = self.get_new_bb_number(scope.function.unwrap());
+                let break_end_bb =
+                    basicblock!(self, scope.function.unwrap(), Some(break_end_bb_label));
+                self.bbs_status.insert(break_end_bb, BBStatus::Pushable);
+                insertbb!(self, scope.function.unwrap(), [break_end_bb]);
+                scope.basic_block = Some(break_end_bb);
+            } else {
+                panic!("Break statement must be in a loop!")
+            }
+        }
+    }
+
+    fn visit_continue_stmt(&mut self, scope: &mut Scope) {
+        if scope.is_global {
+            panic!("Continue statement can not in global scope!")
+        } else {
+            if let Some((while_entry_bb, _)) = scope.curr_loop_bb {
+                // jump to while entry if encounter a continue stmt
+                let jump_value = value!(self, scope.function.unwrap(), jump, while_entry_bb);
+                insertvalue!(
+                    self,
+                    scope.function.unwrap(),
+                    scope.basic_block.unwrap(),
+                    [jump_value]
+                );
+                self.bbs_status
+                    .insert(scope.basic_block.unwrap(), BBStatus::Branched);
+
+                let continue_end_bb_label = self.get_new_bb_number(scope.function.unwrap());
+                let continue_end_bb =
+                    basicblock!(self, scope.function.unwrap(), Some(continue_end_bb_label));
+                self.bbs_status.insert(continue_end_bb, BBStatus::Pushable);
+                insertbb!(self, scope.function.unwrap(), [continue_end_bb]);
+                scope.basic_block = Some(continue_end_bb);
+            } else {
+                panic!("Continue statement must be in a loop!")
+            }
+        }
+    }
+
+    fn visit_while_stmt(&mut self, while_stmt: &ast::WhileStmt, scope: &mut Scope) {
+        if scope.is_global {
+            panic!("While statement can not in a global scope")
+        } else {
+            let cur_last_nested_bb = scope.last_nested_bb;
+            let cur_loop_bb = scope.curr_loop_bb;
+
+            // make while entry basicblock, while body basicblock, while end basicblock
+            let while_entry_bb_label = self.get_new_bb_number(scope.function.unwrap());
+            let while_entry_bb =
+                basicblock!(self, scope.function.unwrap(), Some(while_entry_bb_label));
+            self.bbs_status.insert(while_entry_bb, BBStatus::Pushable);
+
+            // do not label while body and while end, because while entry may generate many bbs..
+            let while_body = basicblock!(self, scope.function.unwrap(), None);
+            self.bbs_status.insert(while_body, BBStatus::Pushable);
+            let while_end = basicblock!(self, scope.function.unwrap(), None);
+            self.bbs_status.insert(while_end, BBStatus::Pushable);
+
+            // insert while entry first
+            insertbb!(self, scope.function.unwrap(), [while_entry_bb]);
+
+            // jump to while_entry bb
+            let jump_value = value!(self, scope.function.unwrap(), jump, while_entry_bb);
+            insertvalue!(
+                self,
+                scope.function.unwrap(),
+                scope.basic_block.unwrap(),
+                [jump_value]
+            );
+            self.bbs_status
+                .insert(scope.basic_block.unwrap(), BBStatus::Branched);
+
+            // deal with while entry
+            scope.basic_block = Some(while_entry_bb);
+            scope.last_nested_bb = Some(while_entry_bb);
+            let cond_value = self.visit_exp(&while_stmt.cond_exp, scope);
+
+            // set while body bb name
+            let while_body_label = self.get_new_bb_number(scope.function.unwrap());
+            bbdata!(self, scope.function.unwrap(), while_body).set_name(Some(while_body_label));
+
+            // insert while body and add a branch in while entry
+            insertbb!(self, scope.function.unwrap(), [while_body]);
+            let br_value = value!(
+                self,
+                scope.function.unwrap(),
+                branch,
+                cond_value,
+                while_body,
+                while_end
+            );
+            insertvalue!(
+                self,
+                scope.function.unwrap(),
+                scope.basic_block.unwrap(),
+                [br_value]
+            );
+            self.bbs_status
+                .insert(scope.basic_block.unwrap(), BBStatus::Branched);
+
+            // visit while body
+            scope.basic_block = Some(while_body);
+            scope.curr_loop_bb = Some((while_entry_bb, while_end));
+            self.visit_stmt(&while_stmt.loop_stmt, scope);
+            scope.curr_loop_bb = cur_loop_bb;
+
+            // from while body jump to while entry
+            let jump_value = value!(self, scope.function.unwrap(), jump, while_entry_bb);
+            insertvalue!(
+                self,
+                scope.function.unwrap(),
+                scope.basic_block.unwrap(),
+                [jump_value]
+            );
+            self.bbs_status
+                .insert(scope.basic_block.unwrap(), BBStatus::Branched);
+
+            // set while end bb name and insert while end bb
+            let while_end_label = self.get_new_bb_number(scope.function.unwrap());
+            bbdata!(self, scope.function.unwrap(), while_end).set_name(Some(while_end_label));
+            insertbb!(self, scope.function.unwrap(), [while_end]);
+
+            scope.last_nested_bb = cur_last_nested_bb;
+
+            if let Some(last_nest_bb) = scope.last_nested_bb {
+                // insert while end bb and add a jump to last nested construction
+                let jump_value = value!(self, scope.function.unwrap(), jump, last_nest_bb);
+                insertvalue!(self, scope.function.unwrap(), while_end, [jump_value]);
+                self.bbs_status
+                    .insert(while_end, BBStatus::JumpToLastNested);
+            }
+            scope.basic_block = Some(while_end);
         }
     }
 
@@ -451,7 +608,7 @@ impl Parser {
         if scope.is_global {
             panic!("If statement can not in a global scope")
         } else {
-            let cur_last_if_bb = scope.last_if_bb;
+            let cur_last_nested_bb = scope.last_nested_bb;
             let exp_value = self.visit_exp(&if_stmt.cond_exp, scope);
 
             if let Some(else_stmt) = &if_stmt.else_stmt {
@@ -471,13 +628,13 @@ impl Parser {
                 }
 
                 // new basic block for branch "then"
-                let then_bb_lable = self.get_new_bb_number(scope.function.unwrap());
-                let then_bb = basicblock!(self, scope.function.unwrap(), Some(then_bb_lable));
+                let then_bb_label = self.get_new_bb_number(scope.function.unwrap());
+                let then_bb = basicblock!(self, scope.function.unwrap(), Some(then_bb_label));
                 self.bbs_status.insert(then_bb, BBStatus::Pushable);
 
                 // new basic block for branch "else"
-                let else_bb_lable = self.get_new_bb_number(scope.function.unwrap());
-                let else_bb = basicblock!(self, scope.function.unwrap(), Some(else_bb_lable));
+                let else_bb_label = self.get_new_bb_number(scope.function.unwrap());
+                let else_bb = basicblock!(self, scope.function.unwrap(), Some(else_bb_label));
                 self.bbs_status.insert(else_bb, BBStatus::Pushable);
 
                 // new basic block for branch "end"
@@ -505,7 +662,7 @@ impl Parser {
                     .insert(scope.basic_block.unwrap(), BBStatus::Branched);
 
                 // change scope of then and else statement
-                scope.last_if_bb = Some(end_bb);
+                scope.last_nested_bb = Some(end_bb);
 
                 // visit then statement
                 scope.basic_block = Some(then_bb); // change bb of scope
@@ -515,7 +672,7 @@ impl Parser {
                 scope.basic_block = Some(else_bb); // change bb of scope
                 self.visit_stmt(else_stmt, scope);
 
-                scope.last_if_bb = cur_last_if_bb;
+                scope.last_nested_bb = cur_last_nested_bb;
 
                 // after visit "then" and "else" statement, we need to insert a jump from them to "end" bb, unless they alreay have an out value(ret, br, jump...).
                 let then_jmp_value = value!(self, scope.function.unwrap(), jump, end_bb);
@@ -527,16 +684,16 @@ impl Parser {
                 self.bbs_status.insert(else_bb, BBStatus::Branched);
 
                 // To ensure the end bb is in the right order, we have to set its name and insert it to current function after visit "then" and "else" bb.
-                let end_bb_lable = self.get_new_bb_number(scope.function.unwrap());
+                let end_bb_label = self.get_new_bb_number(scope.function.unwrap());
                 let bb_data = bbdata!(self, scope.function.unwrap(), end_bb);
-                bb_data.set_name(Some(end_bb_lable));
+                bb_data.set_name(Some(end_bb_label));
                 insertbb!(self, scope.function.unwrap(), [end_bb]);
 
                 // Insert a jump value from current if's end branch to last if's end branch
-                if let Some(last_if_bb) = scope.last_if_bb {
-                    let jmp_value = value!(self, scope.function.unwrap(), jump, last_if_bb);
+                if let Some(last_nested_bb) = scope.last_nested_bb {
+                    let jmp_value = value!(self, scope.function.unwrap(), jump, last_nested_bb);
                     insertvalue!(self, scope.function.unwrap(), end_bb, [jmp_value]);
-                    self.bbs_status.insert(end_bb, BBStatus::JumpToLastIf);
+                    self.bbs_status.insert(end_bb, BBStatus::JumpToLastNested);
                 }
 
                 // after this if statement, the current bb of scope is changed to "end"
@@ -557,8 +714,8 @@ impl Parser {
                 }
 
                 // new basic block for branch "then"
-                let then_bb_lable = self.get_new_bb_number(scope.function.unwrap());
-                let then_bb = basicblock!(self, scope.function.unwrap(), Some(then_bb_lable));
+                let then_bb_label = self.get_new_bb_number(scope.function.unwrap());
+                let then_bb = basicblock!(self, scope.function.unwrap(), Some(then_bb_label));
                 self.bbs_status.insert(then_bb, BBStatus::Pushable);
 
                 // new basic block for branch "end"
@@ -586,13 +743,13 @@ impl Parser {
                     .insert(scope.basic_block.unwrap(), BBStatus::Branched);
 
                 // change scope of then statement
-                scope.last_if_bb = Some(end_bb);
+                scope.last_nested_bb = Some(end_bb);
 
                 // visit then statement
                 scope.basic_block = Some(then_bb); // change bb of scope
                 self.visit_stmt(&if_stmt.then_stmt, scope);
 
-                scope.last_if_bb = cur_last_if_bb;
+                scope.last_nested_bb = cur_last_nested_bb;
 
                 // after visit "then" statement, we need to insert a jump from it to "end" bb, unless they alreay have an out value(ret, br, jump...).
                 let then_jmp_value = value!(self, scope.function.unwrap(), jump, end_bb);
@@ -600,16 +757,16 @@ impl Parser {
                 self.bbs_status.insert(then_bb, BBStatus::Branched);
 
                 // To ensure the end bb is in the right order, we have to set its name and insert it to current function after visit "then" and "else" bb.
-                let end_bb_lable = self.get_new_bb_number(scope.function.unwrap());
+                let end_bb_label = self.get_new_bb_number(scope.function.unwrap());
                 let bb_data = bbdata!(self, scope.function.unwrap(), end_bb);
-                bb_data.set_name(Some(end_bb_lable));
+                bb_data.set_name(Some(end_bb_label));
                 insertbb!(self, scope.function.unwrap(), [end_bb]);
 
                 // Insert a jump value from current if's end branch to last if's end branch
-                if let Some(last_if_bb) = scope.last_if_bb {
-                    let jmp_value = value!(self, scope.function.unwrap(), jump, last_if_bb);
+                if let Some(last_nested_bb) = scope.last_nested_bb {
+                    let jmp_value = value!(self, scope.function.unwrap(), jump, last_nested_bb);
                     insertvalue!(self, scope.function.unwrap(), end_bb, [jmp_value]);
-                    self.bbs_status.insert(end_bb, BBStatus::JumpToLastIf);
+                    self.bbs_status.insert(end_bb, BBStatus::JumpToLastNested);
                 }
 
                 // after this if statement, the current bb of scope is changed to "end"
@@ -660,6 +817,8 @@ impl Parser {
                         self.end_bbs.get(&scope.function.unwrap()).unwrap();
 
                     let mut inserted = false;
+
+                    // check if already insert alloc value
                     if !*has_insert_alloc {
                         // insert alloc to entry bb
                         let entry_bb = entrybb!(self, scope.function.unwrap());
@@ -925,7 +1084,8 @@ impl Parser {
                             let jmp_value =
                                 value!(self, scope.function.unwrap(), jump, last_end_exp_bb);
                             insertvalue!(self, scope.function.unwrap(), exp_end_bb, [jmp_value]);
-                            self.bbs_status.insert(exp_end_bb, BBStatus::JumpToLastIf);
+                            self.bbs_status
+                                .insert(exp_end_bb, BBStatus::JumpToLastNested);
                         }
 
                         // Change basicblock to exp_end_bb
@@ -1081,7 +1241,8 @@ impl Parser {
                             let jmp_value =
                                 value!(self, scope.function.unwrap(), jump, last_end_exp_bb);
                             insertvalue!(self, scope.function.unwrap(), exp_end_bb, [jmp_value]);
-                            self.bbs_status.insert(exp_end_bb, BBStatus::JumpToLastIf);
+                            self.bbs_status
+                                .insert(exp_end_bb, BBStatus::JumpToLastNested);
                         }
 
                         // Change basicblock to exp_end_bb
@@ -1698,6 +1859,7 @@ impl Parser {
 
             for (func, func_data) in self.program.funcs() {
                 for (value, value_data) in func_data.dfg().values() {
+                    //println!("{{  {:#?}  }}",value_data);
                     if value_data.used_by().is_empty() && !layout_values.contains(value) {
                         unused_values.push((*func, *value));
                         changed = true;
@@ -1728,6 +1890,64 @@ impl Parser {
                 funcdata!(self, func).layout_mut().bbs_mut().remove(&bb);
                 funcdata!(self, func).dfg_mut().remove_bb(bb);
             }
+
+            // // combine basicblocks: if a basicblock only used by one value and this value is a jump(not branch) ,we can combine the two bb.
+            // let mut dead_bbs: Vec<(Value, Function, BasicBlock)> = vec![];
+
+            // for (func, func_data) in self.program.funcs() {
+            //     for (bb, _) in func_data.layout().bbs() {
+            //         let used_by_values = imbbdata!(self, *func, *bb).used_by();
+            //         if used_by_values.len() == 1 {
+            //             for value in used_by_values {
+            //                 if matches!(
+            //                     imvaluedata!(self, *func, *value).kind(),
+            //                     ValueKind::Jump(_)
+            //                 ) {
+            //                     dead_bbs.push((*value, *func, *bb));
+            //                     changed = true;
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
+
+            // // find bb of value, and combine two bbs
+            // for (dead_value, dead_func, dead_bb) in dead_bbs {
+            //     let mut dead_bb_values: Vec<Value> = vec![];
+            //     let mut ori_bb: Option<BasicBlock> = None;
+            //     let mut ori_func: Option<Function> = None;
+
+            //     for (func, func_data) in self.program.funcs() {
+            //         for (bb, bb_node) in func_data.layout().bbs() {
+            //             for (value, _) in bb_node.insts() {
+            //                 if *value == dead_value {
+            //                     // combine dead_bb with bb
+            //                     ori_bb = Some(*bb);
+            //                     ori_func = Some(*func);
+            //                 }
+            //             }
+            //         }
+            //     }
+
+            //     // pop all values of dead bb
+
+            //     while let Some((front_value, _)) = funcdata!(self, dead_func)
+            //         .layout_mut()
+            //         .bb_mut(dead_bb)
+            //         .insts_mut()
+            //         .pop_front()
+            //     {
+            //         dead_bb_values.push(front_value);
+            //     }
+
+            //     for value in dead_bb_values {
+            //         funcdata!(self, ori_func.unwrap())
+            //             .layout_mut()
+            //             .bb_mut(ori_bb.unwrap())
+            //             .insts_mut()
+            //             .extend([value]);
+            //     }
+            // }
 
             if !changed {
                 break;

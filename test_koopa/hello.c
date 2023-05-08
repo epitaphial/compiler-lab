@@ -1,9 +1,9 @@
 int main()
 {
-  if (0||0)
-    return 1;
-  else
-    return 120;
-  return 3;
-  return 4;
+  int a = 1, b = 2, c;
+  while (a && b)
+  {
+    break;
+  }
+  return c;
 }

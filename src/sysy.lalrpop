@@ -130,15 +130,20 @@ Stmt:ast::Stmt = {
 // | ContinueStmt//TODO
 // | RetStmt
 // | "if" "(" Exp ")" MatchedStmt "else" MatchedStmt
-// | "while" "(" Exp ")" MatchedStmt;//TODO
+// | "while" "(" Exp ")" MatchedStmt;
 MatchedStmt:ast::Stmt = {
     AssignStmt => ast::Stmt::AssignStmt(<>),
     ExpStmt => ast::Stmt::ExpStmt(<>),
     BlockStmt => ast::Stmt::BlockStmt(<>),
     RetStmt => ast::Stmt::RetStmt(<>),
-    "if" "(" <cond_exp:Exp> ")" <then_stmt:MatchedStmt> "else" <else_stmt:MatchedStmt> =>{
+    "if" "(" <cond_exp:Exp> ")" <then_stmt:MatchedStmt> "else" <else_stmt:MatchedStmt> => {
         ast::Stmt::IfStmt(Box::new(ast::IfStmt{cond_exp,then_stmt,else_stmt:Some(else_stmt)}))
     },
+    "while" "(" <cond_exp:Exp> ")" <loop_stmt:MatchedStmt> => {
+        ast::Stmt::WhileStmt(Box::new(ast::WhileStmt{cond_exp,loop_stmt}))
+    },
+    "break" ";" => ast::Stmt::BreakStmt,
+    "continue" ";" => ast::Stmt::ContinueStmt,
 };
 
 // UnmatchedStmt ::= "if" "(" Exp ")" Stmt
@@ -150,6 +155,9 @@ UnmatchedStmt:ast::Stmt = {
     },
     "if" "(" <cond_exp:Exp> ")" <then_stmt:MatchedStmt> "else" <else_stmt:UnmatchedStmt> =>{
         ast::Stmt::IfStmt(Box::new(ast::IfStmt{cond_exp,then_stmt,else_stmt:Some(else_stmt)}))
+    },
+    "while" "(" <cond_exp:Exp> ")" <loop_stmt:UnmatchedStmt> => {
+        ast::Stmt::WhileStmt(Box::new(ast::WhileStmt{cond_exp,loop_stmt}))
     },
 };
 

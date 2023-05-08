@@ -229,20 +229,25 @@ impl AsmGenerator for ValueData {
             ValueKind::Jump(jump) => {
                 let obj_bb_name = &func_data.dfg().bb(jump.target()).name().clone().unwrap()[1..];
                 asm_inst.push_inst(format!("j {}", obj_bb_name));
-
             }
             ValueKind::Branch(branch) => {
                 let cond_value = self.get_value(func_data, &branch.cond(), stack);
-                let true_bb_name = &func_data.dfg().bb(branch.true_bb()).name().clone().unwrap()[1..];
-                let false_bb_name = &func_data.dfg().bb(branch.false_bb()).name().clone().unwrap()[1..];
+                let true_bb_name =
+                    &func_data.dfg().bb(branch.true_bb()).name().clone().unwrap()[1..];
+                let false_bb_name = &func_data
+                    .dfg()
+                    .bb(branch.false_bb())
+                    .name()
+                    .clone()
+                    .unwrap()[1..];
                 match cond_value {
-                    AsmValue::Literal(lit)=>{
+                    AsmValue::Literal(lit) => {
                         asm_inst.push_inst(format!("li t0, {}", lit));
-                        asm_inst.push_inst(format!("beqz t0, {}",false_bb_name));
+                        asm_inst.push_inst(format!("beqz t0, {}", false_bb_name));
                     }
-                    AsmValue::StackPos(pos)=>{
+                    AsmValue::StackPos(pos) => {
                         asm_inst.push_inst(format!("lw t0, {}(sp)", pos));
-                        asm_inst.push_inst(format!("beqz t0, {}",false_bb_name));
+                        asm_inst.push_inst(format!("beqz t0, {}", false_bb_name));
                     }
                 }
                 asm_inst.push_inst(format!("j {}", true_bb_name));

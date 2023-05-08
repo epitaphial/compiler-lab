@@ -125,6 +125,9 @@ pub enum Stmt {
     ExpStmt(ExpStmt),
     BlockStmt(BlockStmt),
     IfStmt(Box<IfStmt>),
+    WhileStmt(Box<WhileStmt>),
+    BreakStmt,
+    ContinueStmt,
 }
 
 // BlockStmt ::= Block
@@ -151,6 +154,13 @@ pub struct IfStmt {
     pub cond_exp: Exp,
     pub then_stmt: Stmt,
     pub else_stmt: Option<Stmt>,
+}
+
+// WhileStmt := "while" "(" Exp ")" Stmt;
+#[derive(Debug)]
+pub struct WhileStmt {
+    pub cond_exp: Exp,
+    pub loop_stmt: Stmt,
 }
 
 // AssignStmt ::= LVal "=" Exp ";"
