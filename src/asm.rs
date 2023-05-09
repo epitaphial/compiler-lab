@@ -21,13 +21,10 @@ impl AsmProgram {
         let mut asm_str = String::new();
         for asm_func in &self.functions {
             asm_str.push_str("  .text\n");
-            if let FunctionName::Other(func_name) = &asm_func.func_name {
-                asm_str.push_str(format!("  .globl {}\n", func_name).as_str());
-                asm_str.push_str(format!("{}:\n", func_name).as_str());
-            } else {
-                asm_str.push_str("  .globl main\n");
-                asm_str.push_str("main:\n");
-            }
+
+            asm_str.push_str(format!("  .globl {}\n", &asm_func.func_name).as_str());
+            asm_str.push_str(format!("{}:\n", &asm_func.func_name).as_str());
+
             for asm_bb in &asm_func.blocks {
                 if let BlockName::Other(bb_name) = &asm_bb.bb_name {
                     asm_str.push_str(format!("{}:\n", &bb_name[1..]).as_str());
@@ -43,12 +40,7 @@ impl AsmProgram {
     }
 }
 
-#[derive(Debug, Default)]
-pub enum FunctionName {
-    #[default]
-    Main,
-    Other(String),
-}
+type FunctionName = String;
 
 #[derive(Default, Debug)]
 pub struct Stack {
@@ -94,13 +86,8 @@ pub struct AsmFunction {
 
 impl AsmFunction {
     pub fn new(func_name: String) -> Self {
-        let func_name = if func_name.eq("@main") {
-            FunctionName::Main
-        } else {
-            FunctionName::Other(func_name)
-        };
         AsmFunction {
-            func_name,
+            func_name: func_name[1..].to_string(),
             ..Self::default()
         }
     }

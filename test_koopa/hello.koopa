@@ -1,39 +1,27 @@
-fun @main(): i32 {
+fun @main(@b: i32, @c: i32, @d: i32) {
 %entry:
   %0 = alloc i32
+  store @b, %0
   %1 = alloc i32
-  store 1, %1
+  store @c, %1
   %2 = alloc i32
-  store 2, %2
+  store @d, %2
   %3 = alloc i32
-  jump %bb0
-
-%end_bb:
-  %4 = load %0
-  ret %4
+  %4 = load %3
+  br %4, %bb0, %bb3
 
 %bb0:
-  %5 = load %1
-  %6 = alloc i32
-  store 0, %6
-  %7 = ne %5, 0
-  br %7, %bb1, %bb2
+  %5 = load %3
+  br %5, %bb1, %bb2
 
 %bb1:
-  %8 = load %2
-  %9 = ne %8, 0
-  store %9, %6
+  %6 = load %0
+  store %6, %3
   jump %bb2
 
 %bb2:
-  %10 = load %6
-  br %10, %bb3, %bb5
+  jump %bb3
 
 %bb3:
-  jump %bb5
-
-%bb5:
-  %11 = load %3
-  store %11, %0
-  jump %end_bb
+  ret
 }

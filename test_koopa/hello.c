@@ -1,9 +1,7 @@
-int main()
-{
-  int a = 1, b = 2, c;
-  while (a && b)
-  {
-    break;
+void main(int b,int c,int d) {
+  int a;
+  if(a)
+  if(a){
+    a=b;
   }
-  return c;
 }

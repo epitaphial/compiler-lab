@@ -50,7 +50,7 @@ ConstInitVal:ast::ConstInitVal = {
     "{" <const_init_val_tuple:(ConstInitVal ("," <ConstInitVal>)*)?> "}" => {
         if let Some(const_init_val_tuple) = const_init_val_tuple{
             let (const_init_val,mut const_init_vals) = const_init_val_tuple;
-            const_init_vals.push(const_init_val);
+            const_init_vals.insert(0,const_init_val);
             ast::ConstInitVal::ConstInitVal(Some(const_init_vals))
         }else{
             ast::ConstInitVal::ConstInitVal(None)
@@ -86,7 +86,7 @@ InitVal:ast::InitVal = {
     "{" <init_val_tuple:(InitVal ("," <InitVal>)*)?> "}" => {
         if let Some(init_val_tuple) = init_val_tuple{
             let (init_val,mut init_vals) = init_val_tuple;
-            init_vals.push(init_val);
+            init_vals.insert(0,init_val);
             ast::InitVal::InitVal(Some(init_vals))
         }else{
             ast::InitVal::InitVal(None)
@@ -94,10 +94,22 @@ InitVal:ast::InitVal = {
     }
 };
 
-// Expect: FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
-// Now: FuncDef ::= FuncType IDENT "()" Block;
+// FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
 FuncDef:ast::FuncDef = {
-    <func_type:Type> <func_ident:Ident> "(" ")" <block:Block> => ast::FuncDef{<>},
+    <func_type:Type> <func_ident:Ident> "(" <func_params:FuncFParams?> ")" <block:Block> => ast::FuncDef{<>},
+};
+
+// FuncFParams ::= FuncFParam {"," FuncFParam};
+FuncFParams:ast::FuncFParams = {
+    <first_func_param:FuncFParam> <mut func_params:("," <FuncFParam>)*> => {
+        func_params.insert(0,first_func_param);
+        func_params
+    }
+};
+
+// FuncFParam ::= BType IDENT ["[" "]" {"[" ConstExp "]"}];
+FuncFParam:ast::FuncFParam = {
+    <param_type:Type> <param_ident:Ident> <param_array:("[" "]" <("[" <ConstExp> "]")*>)?> => ast::FuncFParam{<>},
 };
 
 // FuncType ::= "void" | "int";
@@ -265,11 +277,19 @@ MulOp:ast::Operator = {
     "%" => ast::Operator::GetRemainder,
 };
 
-// Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
-// Now: UnaryExp ::= PrimaryExp | UnaryOp UnaryExp;
+// UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
 UnaryExp:ast::UnaryExp = {
     PrimaryExp => ast::UnaryExp::PrimaryExp(<>),
+    <Ident> "(" <FuncRParams?> ")" => ast::UnaryExp::FuncCall(<>),
     <unary_op:UnaryOp> <unary_exp:UnaryExp> => ast::UnaryExp::UnaryOp(unary_op,Box::new(unary_exp)),
+};
+
+// FuncRParams ::= Exp {"," Exp};
+FuncRParams:ast::FuncRParams = {
+    <first_exp:Exp> <mut exps:("," <Exp>)*> => {
+        exps.insert(0,first_exp);
+        exps
+    },
 };
 
 // UnaryOp ::= "+" | "-" | "!";

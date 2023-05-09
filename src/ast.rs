@@ -79,13 +79,24 @@ pub enum InitVal {
     InitVal(Option<Vec<InitVal>>),
 }
 
-// Expect: FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
-// Now: FuncDef ::= FuncType IDENT "()" Block;
+// FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block;
 #[derive(Debug)]
 pub struct FuncDef {
     pub func_type: Type,
     pub func_ident: Ident,
+    pub func_params: Option<FuncFParams>,
     pub block: Block,
+}
+
+// FuncFParams ::= FuncFParam {"," FuncParam};
+pub type FuncFParams = Vec<FuncFParam>;
+
+// FuncFParam ::= BType IDENT ["[" "]" {"[" ConstExp "]"}];
+#[derive(Debug)]
+pub struct FuncFParam {
+    pub param_type: Type,
+    pub param_ident: Ident,
+    pub param_array: Option<Vec<ConstExp>>,
 }
 
 // Type ::= "void" | "int";
@@ -108,7 +119,7 @@ pub enum BlockItem {
     Stmt(Stmt),
 }
 
-// Expect: Stmt ::= LVal "=" Exp ";"
+// Stmt ::= LVal "=" Exp ";"
 // | [Exp] ";"
 // | Block
 // | "if" "(" Exp ")" Stmt ["else" Stmt]
@@ -116,8 +127,6 @@ pub enum BlockItem {
 // | "break" ";"
 // | "continue" ";"
 // | RetStmt;
-// Now: Stmt ::= RetStmt
-// | AssignStmt;
 #[derive(Debug)]
 pub enum Stmt {
     RetStmt(RetStmt),
@@ -231,13 +240,16 @@ pub enum MulExp {
     BinaryOp(Box<MulExp>, Operator, UnaryExp),
 }
 
-// Expect: UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
-// Now: UnaryExp    ::= PrimaryExp | UnaryOp UnaryExp;
+// UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
 #[derive(Debug)]
 pub enum UnaryExp {
     PrimaryExp(PrimaryExp),
+    FuncCall(Ident, Option<FuncRParams>),
     UnaryOp(Operator, Box<UnaryExp>),
 }
+
+// FuncRParams ::= Exp {"," Exp};
+pub type FuncRParams = Vec<Exp>;
 
 // PrimaryExp ::= "(" Exp ")" | LVal | Number;
 #[derive(Debug)]

@@ -47,18 +47,41 @@ impl AsmGenerator for FunctionData {
     fn generate_function(&self) -> AsmFunction {
         let mut asm_func = AsmFunction::new(self.name().to_string());
         let mut stack = Stack::new();
-        let mut stack_size = 0;
-        for (bb, bb_node) in self.layout().bbs() {
+
+        let mut alloc_stack_size = 0;
+        let mut local_var_size = 0;
+        let mut is_leaf_function = true;
+        let mut args_stack_num = 0;
+        for (_bb, bb_node) in self.layout().bbs() {
             for (value, _) in bb_node.insts() {
                 let value_data = self.dfg().value(*value);
                 match value_data.ty().kind() {
-                    TypeKind::Int32 => stack_size += 4,
-                    TypeKind::Unit => {}
-                    TypeKind::Pointer(_) => stack_size += 4,
+                    TypeKind::Int32 => local_var_size += 4,
+                    TypeKind::Unit => {
+                        if let ValueKind::Call(call) = value_data.kind() {
+                            is_leaf_function = false;
+                            let callee_args_stack_num = call.args().len() - 8;
+                            if callee_args_stack_num > args_stack_num {
+                                args_stack_num = callee_args_stack_num;
+                            }
+                        }
+                    }
+                    TypeKind::Pointer(_) => local_var_size += 4,
                     _ => {}
                 }
             }
-            stack.set_stack_size(stack_size);
+        }
+
+        alloc_stack_size += local_var_size;
+        if !is_leaf_function {
+            alloc_stack_size += 4;
+        }
+        alloc_stack_size += 4 * args_stack_num;
+
+        println!("{}", alloc_stack_size);
+        stack.set_stack_size(alloc_stack_size as u32);
+
+        for (bb, bb_node) in self.layout().bbs() {
             let block_data = self.dfg().bb(*bb);
             asm_func.push_bb(block_data.generate_basic_block(self, bb_node, &mut stack));
         }
@@ -67,6 +90,12 @@ impl AsmGenerator for FunctionData {
         if stack.get_stack_size() != 0 {
             let mut prologue = AsmInstruction::new();
             prologue.push_inst(format!("addi sp, sp, -{}", stack.get_stack_size()));
+            // need to save args
+            let func_params = self.params();
+            for _func_param in func_params{
+                todo!()
+            }
+
             asm_func.insert_inst("%entry".to_string(), 0, prologue);
         }
 
@@ -254,6 +283,9 @@ impl AsmGenerator for ValueData {
             }
             ValueKind::Alloc(_) => {
                 stack.insert_value(*value, 4);
+            }
+            ValueKind::Call(_) => {
+                unimplemented!()
             }
             _ => {
                 unimplemented!()

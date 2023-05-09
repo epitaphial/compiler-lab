@@ -24,9 +24,15 @@ lalrpop_mod!(pub sysy);
 #[derive(Debug, Default)]
 struct BlockNode {
     // symbol name and symbol value
-    pub symbols: RefCell<HashMap<String, Value>>,
+    pub symbols: RefCell<HashMap<String, Symbol>>,
     pub parent: RefCell<Option<Weak<BlockNode>>>,
     pub childs: RefCell<Vec<Rc<BlockNode>>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Symbol {
+    Value(Value),
+    Function(Function),
 }
 
 impl BlockNode {
@@ -34,23 +40,23 @@ impl BlockNode {
         Rc::new(Self::default())
     }
 
-    pub fn insert_symbol(&self, name: String, value: Value) {
-        if self.symbols.borrow().get(&name) == None {
-            (*self.symbols.borrow_mut()).insert(name, value);
+    pub fn insert_symbol(&self, name: String, symbol: Symbol) {
+        if matches!(self.symbols.borrow().get(&name), None) {
+            (*self.symbols.borrow_mut()).insert(name, symbol);
         } else {
             panic!("Redefined symbol: {}", &name);
         }
     }
 
-    pub fn lookup_symbol(&self, name: &String) -> Value {
-        if let Some(value) = self.symbols.borrow().get(name) {
-            *value
+    pub fn lookup_symbol(&self, name: &String) -> Symbol {
+        if let Some(symbol) = self.symbols.borrow().get(name) {
+            *symbol
         } else {
             let mut op_parent = (*self.parent.borrow()).clone();
             while let Some(parent) = &op_parent {
                 // find symbols
-                if let Some(value) = (*parent.upgrade().unwrap()).symbols.borrow().get(name) {
-                    return *value;
+                if let Some(symbol) = (*parent.upgrade().unwrap()).symbols.borrow().get(name) {
+                    return *symbol;
                 } else {
                     op_parent = (*parent.clone().upgrade().unwrap()).parent.borrow().clone();
                 }
@@ -76,7 +82,9 @@ pub struct Parser {
     program: Program,
     bb_number: HashMap<Function, u32>, // the basic block number which start from 0
     bbs_status: HashMap<BasicBlock, BBStatus>, // the status of basicblock
-    end_bbs: HashMap<Function, (BasicBlock, Value, bool)>, // The hashmap's value is the end basic block and return value of the key function, exists only has multi return statement.The bool stand for there is already has alloc return value.
+    end_bbs: HashMap<Function, (BasicBlock, Option<Value>, bool)>, // The hashmap's value is the end basic block and return value of the key function, exists only has multi return statement.The bool stand for there is already has alloc return value.
+    global_symbols: Rc<BlockNode>,
+    has_ret_statements: Vec<Function>, // If the function has no return statements, we need to add a default return statements...
 }
 
 #[derive(Debug, Clone, Default)]
@@ -271,7 +279,7 @@ impl Parser {
                 let value = self.visit_const_init_val(&const_def.const_init_val, scope);
                 scope
                     .block_node
-                    .insert_symbol(const_def.const_ident.clone(), value);
+                    .insert_symbol(const_def.const_ident.clone(), Symbol::Value(value));
             } else {
                 // define a const array
                 unimplemented!()
@@ -319,7 +327,9 @@ impl Parser {
                             scope.basic_block.unwrap(),
                             [alloc]
                         );
-                        scope.block_node.insert_symbol(var_ident.clone(), alloc);
+                        scope
+                            .block_node
+                            .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
                     } else {
                         // arrray
                         unimplemented!()
@@ -337,7 +347,9 @@ impl Parser {
                             scope.basic_block.unwrap(),
                             [alloc, store]
                         );
-                        scope.block_node.insert_symbol(var_ident.clone(), alloc);
+                        scope
+                            .block_node
+                            .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
                     } else {
                         // array
                         unimplemented!()
@@ -362,18 +374,34 @@ impl Parser {
         let mut sym_func_name = func_def.func_ident.clone();
         sym_func_name.insert(0, '@');
 
-        let function = match func_def.func_type {
-            ast::Type::Int => self.program.new_func(FunctionData::new(
-                sym_func_name,
-                Vec::new(),
-                Type::get_i32(),
-            )),
-            ast::Type::Void => self.program.new_func(FunctionData::new(
-                sym_func_name,
-                Vec::new(),
-                Type::get_unit(),
-            )),
+        let func_type = match func_def.func_type {
+            ast::Type::Int => Type::get_i32(),
+            ast::Type::Void => Type::get_unit(),
         };
+
+        let function: Function;
+        if let Some(func_params) = &func_def.func_params {
+            let mut params: Vec<(Option<String>, Type)> = vec![];
+            for func_param in func_params {
+                let param_type = match func_param.param_type {
+                    ast::Type::Int => Type::get_i32(),
+                    _ => panic!("param type can not be void"),
+                };
+                let mut param_name = func_param.param_ident.clone();
+                param_name.insert(0, '@');
+                params.push((Some(param_name), param_type));
+            }
+
+            function = self.program.new_func(FunctionData::with_param_names(
+                sym_func_name,
+                params,
+                func_type,
+            ));
+        } else {
+            function =
+                self.program
+                    .new_func(FunctionData::new(sym_func_name, Vec::new(), func_type));
+        }
 
         self.bb_number.insert(function, 0); // init bb number for current function
 
@@ -383,23 +411,53 @@ impl Parser {
         insertbb!(self, function, [entry_bb]);
 
         // If current function has return value
-        if !matches!(func_def.func_type, ast::Type::Void) {
+        if matches!(func_def.func_type, ast::Type::Void) {
+            // add an end block to load return value and return
+            let end_bb = basicblock!(self, function, Some("%end_bb".into()));
+            self.bbs_status.insert(end_bb, BBStatus::Pushable);
+
+            self.end_bbs.insert(function, (end_bb, None, false));
+        } else {
             // alloc value to store return value
             let alloc = value!(self, function, alloc, Type::get_i32());
-            //insertvalue!(self, function, entry_bb, [alloc]);
 
             // add an end block to load return value and return
             let end_bb = basicblock!(self, function, Some("%end_bb".into()));
             self.bbs_status.insert(end_bb, BBStatus::Pushable);
-            insertbb!(self, function, [end_bb]);
 
-            let load = value!(self, function, load, alloc);
-            let ret = value!(self, function, ret, Some(load));
-            insertvalue!(self, function, end_bb, [load, ret]);
-            self.end_bbs.insert(function, (end_bb, alloc, false));
+            self.end_bbs.insert(function, (end_bb, Some(alloc), false));
         }
 
-        let block_node = BlockNode::new(); // maybe consider param symbols...
+        // new a local symbol table
+        let block_node = BlockNode::new();
+
+        // Insert function to global symbol table
+        self.global_symbols
+            .insert_symbol(func_def.func_ident.clone(), Symbol::Function(function));
+
+        // if function has params, store params.
+
+        if let Some(func_params) = &func_def.func_params {
+            let param_values = imfuncdata!(self, function).params();
+            let mut param_values_vec: Vec<Value> = vec![];
+            for param_value in param_values {
+                param_values_vec.push(*param_value);
+            }
+            for index in 0..func_params.len() {
+                let param_value = param_values_vec[index];
+                let param_type = match func_params[index].param_type {
+                    ast::Type::Int => Type::get_i32(),
+                    _ => panic!("param type can not be void"),
+                };
+                let alloc_value = value!(self, function, alloc, param_type);
+                block_node.insert_symbol(
+                    func_params[index].param_ident.clone(),
+                    Symbol::Value(alloc_value),
+                );
+                let store_value = value!(self, function, store, param_value, alloc_value);
+                insertvalue!(self, function, entry_bb, [alloc_value, store_value]);
+            }
+        }
 
         let mut scope = Scope {
             is_global: false,
@@ -411,6 +469,43 @@ impl Parser {
             curr_loop_bb: None,
         };
         self.visit_block(&func_def.block, &mut scope);
+
+        // If current function has return value
+        if matches!(func_def.func_type, ast::Type::Void) {
+            let (end_bb, _, _) = self.end_bbs.get(&function).unwrap();
+            // check if current function has a return statement, if not, add a default one.
+            if !self.has_ret_statements.contains(&function) {
+                let ret_value = value!(self, scope.function.unwrap(), ret,None);
+                insertvalue!(
+                    self,
+                    scope.function.unwrap(),
+                    scope.basic_block.unwrap(),
+                    [ret_value]
+                );
+            }
+            insertbb!(self, function, [*end_bb]);
+
+            let ret = value!(self, function, ret, None);
+            insertvalue!(self, function, *end_bb, [ret]);
+        } else {
+            let (end_bb, alloc, _) = self.end_bbs.get(&function).unwrap();
+            // check if current function has a return statement, if not, add a default one.
+            if !self.has_ret_statements.contains(&function) {
+                let zero_value = value!(self, scope.function.unwrap(), integer, 0);
+                let ret_value = value!(self, scope.function.unwrap(), ret,Some(zero_value));
+                insertvalue!(
+                    self,
+                    scope.function.unwrap(),
+                    scope.basic_block.unwrap(),
+                    [ret_value]
+                );
+            }
+            insertbb!(self, function, [*end_bb]);
+
+            let load = value!(self, function, load, alloc.unwrap());
+            let ret = value!(self, function, ret, Some(load));
+            insertvalue!(self, function, *end_bb, [load, ret]);
+        }
     }
 
     fn visit_block(&mut self, block: &crate::ast::Block, scope: &mut Scope) {
@@ -794,28 +889,18 @@ impl Parser {
         if scope.is_global {
             panic!("Return statement can not be in global scope!")
         } else {
+            self.has_ret_statements.push(scope.function.unwrap());
             if let Some(exp) = &ret_stmt.exp {
                 // with return value
 
                 // visit exp of return
                 let exp_value = self.visit_exp(exp, scope);
 
-                if isentrybb!(self, scope.function.unwrap(), scope.basic_block.unwrap()) {
-                    // If in entry bb
-                    let ret = value!(self, scope.function.unwrap(), ret, Some(exp_value));
-                    insertvalue!(
-                        self,
-                        scope.function.unwrap(),
-                        scope.basic_block.unwrap(),
-                        [ret]
-                    );
-                    self.bbs_status
-                        .insert(scope.basic_block.unwrap(), BBStatus::Branched);
-                } else {
-                    // If not in entry bb, jump to end bb
-                    let (end_bb, return_value, has_insert_alloc) =
-                        self.end_bbs.get(&scope.function.unwrap()).unwrap();
+                // jump to end bb
+                let (end_bb, return_value, has_insert_alloc) =
+                    self.end_bbs.get(&scope.function.unwrap()).unwrap();
 
+                if let Some(return_value) = return_value {
                     let mut inserted = false;
 
                     // check if already insert alloc value
@@ -850,16 +935,37 @@ impl Parser {
                         .insert(scope.basic_block.unwrap(), BBStatus::Branched);
 
                     if inserted {
-                        self.end_bbs
-                            .insert(scope.function.unwrap(), (*end_bb, *return_value, true));
+                        self.end_bbs.insert(
+                            scope.function.unwrap(),
+                            (*end_bb, Some(*return_value), true),
+                        );
                     }
+                } else {
+                    panic!("void function should not return a value!")
                 }
             } else {
                 // void function without return value
-                unimplemented!();
-                // let func_data = funcdata!(self, function);
-                // let ret = value!(func_data, ret, None);
-                // insertvalue!(self, func_data, bb, [ret]);
+
+                // If not in entry bb, jump to end bb
+                let (end_bb, return_value, _) = self.end_bbs.get(&scope.function.unwrap()).unwrap();
+
+                if matches!(return_value, None) {
+                    let jmp_value = value!(self, scope.function.unwrap(), jump, *end_bb);
+
+                    insertvalue!(
+                        self,
+                        scope.function.unwrap(),
+                        scope.basic_block.unwrap(),
+                        [jmp_value]
+                    );
+                    self.bbs_status
+                        .insert(scope.basic_block.unwrap(), BBStatus::Branched);
+
+                    self.end_bbs
+                        .insert(scope.function.unwrap(), (*end_bb, None, false));
+                } else {
+                    panic!("int function should not return a void!")
+                }
             }
         }
     }
@@ -879,15 +985,19 @@ impl Parser {
             panic!()
         } else {
             let value = self.visit_exp(&ass_stmt.exp, scope);
-            let ass_l_value = scope.block_node.lookup_symbol(&ass_stmt.l_val.ident);
+            let ass_l_value_symbol = scope.block_node.lookup_symbol(&ass_stmt.l_val.ident);
             // must do some type check, because we can't assign to a const!
-            let store = value!(self, scope.function.unwrap(), store, value, ass_l_value);
-            insertvalue!(
-                self,
-                scope.function.unwrap(),
-                scope.basic_block.unwrap(),
-                [store]
-            );
+            if let Symbol::Value(ass_l_value) = ass_l_value_symbol {
+                let store = value!(self, scope.function.unwrap(), store, value, ass_l_value);
+                insertvalue!(
+                    self,
+                    scope.function.unwrap(),
+                    scope.basic_block.unwrap(),
+                    [store]
+                );
+            } else {
+                panic!("Can not assign to a function!")
+            }
         }
     }
 
@@ -896,21 +1006,25 @@ impl Parser {
             unimplemented!()
         } else {
             // look up symbol table...
-            let value = scope.block_node.lookup_symbol(&l_val.ident);
-            let value_data = imvaluedata!(self, scope.function.unwrap(), value);
+            let value_symbol = scope.block_node.lookup_symbol(&l_val.ident);
+            if let Symbol::Value(value) = value_symbol {
+                let value_data = imvaluedata!(self, scope.function.unwrap(), value);
 
-            if matches!(value_data.kind(), ValueKind::Alloc(_)) {
-                // Need to load first for alloc
-                let load = value!(self, scope.function.unwrap(), load, value);
-                insertvalue!(
-                    self,
-                    scope.function.unwrap(),
-                    scope.basic_block.unwrap(),
-                    [load]
-                );
-                load
+                if matches!(value_data.kind(), ValueKind::Alloc(_)) {
+                    // Need to load first for alloc
+                    let load = value!(self, scope.function.unwrap(), load, value);
+                    insertvalue!(
+                        self,
+                        scope.function.unwrap(),
+                        scope.basic_block.unwrap(),
+                        [load]
+                    );
+                    load
+                } else {
+                    value
+                }
             } else {
-                value
+                panic!("Left value can not be a function yet!")
             }
         }
     }
@@ -1716,6 +1830,28 @@ impl Parser {
         } else {
             match unary_exp {
                 UnaryExp::PrimaryExp(primary_exp) => self.visit_primary_exp(primary_exp, scope),
+                UnaryExp::FuncCall(func_name, func_r_params) => {
+                    let mut args: Vec<Value> = vec![];
+                    if let Some(func_r_params) = func_r_params {
+                        for func_r_param in func_r_params {
+                            let arg_value = self.visit_exp(func_r_param, scope);
+                            args.push(arg_value);
+                        }
+                    }
+                    let callee_symbol = self.global_symbols.lookup_symbol(func_name);
+                    if let Symbol::Function(callee) = callee_symbol {
+                        let call_value = value!(self, scope.function.unwrap(), call, callee, args);
+                        insertvalue!(
+                            self,
+                            scope.function.unwrap(),
+                            scope.basic_block.unwrap(),
+                            [call_value]
+                        );
+                        call_value
+                    } else {
+                        panic!("Must be a function...")
+                    }
+                }
                 UnaryExp::UnaryOp(op, unary_exp) => match op {
                     Operator::Add => self.visit_unary_exp(unary_exp, scope),
                     Operator::Subtract => {
@@ -1822,6 +1958,8 @@ impl Parser {
             bb_number: HashMap::new(),
             bbs_status: HashMap::new(),
             end_bbs: HashMap::new(),
+            global_symbols: BlockNode::new(),
+            has_ret_statements: vec![],
         }
     }
 
