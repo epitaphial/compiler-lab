@@ -475,7 +475,7 @@ impl Parser {
             let (end_bb, _, _) = self.end_bbs.get(&function).unwrap();
             // check if current function has a return statement, if not, add a default one.
             if !self.has_ret_statements.contains(&function) {
-                let ret_value = value!(self, scope.function.unwrap(), ret,None);
+                let ret_value = value!(self, scope.function.unwrap(), ret, None);
                 insertvalue!(
                     self,
                     scope.function.unwrap(),
@@ -492,7 +492,7 @@ impl Parser {
             // check if current function has a return statement, if not, add a default one.
             if !self.has_ret_statements.contains(&function) {
                 let zero_value = value!(self, scope.function.unwrap(), integer, 0);
-                let ret_value = value!(self, scope.function.unwrap(), ret,Some(zero_value));
+                let ret_value = value!(self, scope.function.unwrap(), ret, Some(zero_value));
                 insertvalue!(
                     self,
                     scope.function.unwrap(),
@@ -1953,14 +1953,48 @@ impl Parser {
 
 impl Parser {
     pub fn new() -> Parser {
-        Parser {
+        let mut parser = Parser {
             program: Program::new(),
             bb_number: HashMap::new(),
             bbs_status: HashMap::new(),
             end_bbs: HashMap::new(),
             global_symbols: BlockNode::new(),
             has_ret_statements: vec![],
+        };
+        {
+                    // insert sysy lib function
+
+            // decl @getint(): i32
+            let getint = parser.program.new_func(FunctionData::new_decl("@getint".to_string(), vec![], Type::get_i32()));
+            parser.global_symbols.insert_symbol("getint".to_string(), Symbol::Function(getint));
+
+            // decl @getch(): i32
+            let getch = parser.program.new_func(FunctionData::new_decl("@getch".to_string(), vec![], Type::get_i32()));
+            parser.global_symbols.insert_symbol("getch".to_string(), Symbol::Function(getch));
+
+            // decl @getarray(*i32): i32
+            //parser.program.new_func(FunctionData::new_decl("@getarray".to_string(), vec![Type::get_pointer(Type::get_i32())], Type::get_i32()));
+
+            // decl @putint(i32)
+            let putint = parser.program.new_func(FunctionData::new_decl("@putint".to_string(), vec![Type::get_i32()], Type::get_unit()));
+            parser.global_symbols.insert_symbol("putint".to_string(), Symbol::Function(putint));
+
+            // decl @putch(i32)
+            let putch = parser.program.new_func(FunctionData::new_decl("@putch".to_string(), vec![Type::get_i32()], Type::get_unit()));
+            parser.global_symbols.insert_symbol("putch".to_string(), Symbol::Function(putch));
+
+            // decl @putarray(i32, *i32)
+            //let get_int = FunctionData::new_decl("@get_int".to_string(), vec![], Type::get_i32());
+
+            // decl @starttime()
+            let starttime = parser.program.new_func(FunctionData::new_decl("@starttime".to_string(), vec![], Type::get_unit()));
+            parser.global_symbols.insert_symbol("starttime".to_string(), Symbol::Function(starttime));
+
+            // decl @stoptime()
+            let stoptime = parser.program.new_func(FunctionData::new_decl("@stoptime".to_string(), vec![], Type::get_unit()));
+            parser.global_symbols.insert_symbol("stoptime".to_string(), Symbol::Function(stoptime));
         }
+        parser
     }
 
     pub fn get_new_bb_number(&mut self, function: Function) -> String {
