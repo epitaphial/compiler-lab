@@ -9,7 +9,7 @@ use std::{
 use koopa::{
     back::KoopaGenerator,
     ir::{
-        builder_traits::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder},
+        builder_traits::{BasicBlockBuilder, GlobalInstBuilder, LocalInstBuilder, ValueBuilder},
         BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value, ValueKind,
     },
 };
@@ -83,28 +83,19 @@ pub struct Parser {
     bb_number: HashMap<Function, u32>, // the basic block number which start from 0
     bbs_status: HashMap<BasicBlock, BBStatus>, // the status of basicblock
     end_bbs: HashMap<Function, (BasicBlock, Option<Value>, bool)>, // The hashmap's value is the end basic block and return value of the key function, exists only has multi return statement.The bool stand for there is already has alloc return value.
-    global_symbols: Rc<BlockNode>,
     has_ret_statements: Vec<Function>, // If the function has no return statements, we need to add a default return statements...
 }
 
 #[derive(Debug, Clone, Default)]
 struct Scope {
-    is_global: bool,                                // is in global scope?
-    function: Option<Function>,                     // current function
-    basic_block: Option<BasicBlock>,                // current basicblock
-    block_node: Rc<BlockNode>,                      // current blocknode, to determine the scope
+    is_global: bool,                 // is in global scope?
+    function: Option<Function>,      // current function
+    basic_block: Option<BasicBlock>, // current basicblock
+    block_node: Rc<BlockNode>,       // current blocknode, to determine the scope
+    global_symbols: Rc<BlockNode>,
     last_nested_bb: Option<BasicBlock>, // 1."end" basic block of last ifstatement, when in a if or while statement's end bb, we need to jump to last ifstatement's end bb. For example: if(a)if(b); 2."while entry" basic block of last while statement, when in a if or while statement's end bb, we need to jump to last whilestatement's while entry bb.
     last_end_exp_bb: Option<BasicBlock>, // "end_exp" basic block of logic exp, when in a multi-layer logic expression bb, we need to jump to last exp's end_exp bb. For example: a||b&&c
     curr_loop_bb: Option<(BasicBlock, BasicBlock)>, // current loop's while entry and while end, used for build continue and break.
-}
-
-impl Scope {
-    fn new(is_global: bool) -> Self {
-        Scope {
-            is_global,
-            ..Self::default()
-        }
-    }
 }
 
 macro_rules! funcdata {
@@ -164,11 +155,11 @@ macro_rules! value {
     };
 }
 
-// macro_rules! globalvalue {
-//     ($program:expr,$op:ident,$($value:expr),+)=>{
-//         $program.new_value().$op($($value),+)
-//     };
-// }
+macro_rules! globalvalue {
+    ($self:ident,$op:ident,$($value:expr),+)=>{
+        $self.program.new_value().$op($($value),+)
+    };
+}
 
 macro_rules! insertvalue {
     ($self:ident,$func:expr,$bb:expr,$values:expr) => {
@@ -227,6 +218,12 @@ macro_rules! imvaluedata {
     };
 }
 
+macro_rules! imglobalvaluedata {
+    ($self:ident,$value:expr) => {
+        $self.program.borrow_value($value).clone()
+    };
+}
+
 macro_rules! removevalue {
     ($self:ident,$func:expr,$value:expr) => {
         funcdata!($self, $func).dfg_mut().remove_value($value)
@@ -234,19 +231,19 @@ macro_rules! removevalue {
 }
 
 impl Parser {
-    fn visit_comp_unit(&mut self, comp_unit: &ast::CompUnit) {
+    fn visit_comp_unit(&mut self, comp_unit: &ast::CompUnit, scope: &mut Scope) {
         match comp_unit {
             ast::CompUnit::Decl(comp_unit, decl) => {
                 if let Some(comp_unit) = comp_unit {
-                    self.visit_comp_unit(comp_unit);
+                    self.visit_comp_unit(comp_unit, scope);
                 }
-                self.visit_decl(decl, &mut Scope::new(true));
+                self.visit_decl(decl, scope);
             }
             ast::CompUnit::FuncDef(comp_unit, func_def) => {
                 if let Some(comp_unit) = comp_unit {
-                    self.visit_comp_unit(comp_unit);
+                    self.visit_comp_unit(comp_unit, scope);
                 }
-                self.visit_func_def(func_def);
+                self.visit_func_def(func_def, scope);
             }
         }
     }
@@ -262,28 +259,22 @@ impl Parser {
         }
     }
 
-    // global decl's lvalue must be a const
     fn visit_const_decl(&mut self, const_decl: &ast::ConstDecl, scope: &mut Scope) {
-        // do some type check here...?
         for const_def in &const_decl.const_defs {
             self.visit_const_def(const_def, scope);
         }
     }
 
     fn visit_const_def(&mut self, const_def: &ast::ConstDef, scope: &mut Scope) {
-        if scope.is_global {
-            unimplemented!()
+        if const_def.const_exps.len() == 0 {
+            // define a const value
+            let value = self.visit_const_init_val(&const_def.const_init_val, scope);
+            scope
+                .block_node
+                .insert_symbol(const_def.const_ident.clone(), Symbol::Value(value));
         } else {
-            if const_def.const_exps.len() == 0 {
-                // define a const value
-                let value = self.visit_const_init_val(&const_def.const_init_val, scope);
-                scope
-                    .block_node
-                    .insert_symbol(const_def.const_ident.clone(), Symbol::Value(value));
-            } else {
-                // define a const array
-                unimplemented!()
-            }
+            // define a const array
+            unimplemented!()
         }
     }
 
@@ -292,21 +283,17 @@ impl Parser {
         cons_init_val: &ast::ConstInitVal,
         scope: &mut Scope,
     ) -> Value {
-        if scope.is_global {
-            unimplemented!()
-        } else {
-            match cons_init_val {
-                ast::ConstInitVal::ConstExp(const_exp) => self.visit_const_exp(const_exp, scope),
-                ast::ConstInitVal::ConstInitVal(_const_init_val) => {
-                    // const array init values...
-                    unimplemented!()
-                }
+        match cons_init_val {
+            ast::ConstInitVal::ConstExp(const_exp) => self.visit_const_exp(const_exp, scope),
+            ast::ConstInitVal::ConstInitVal(_const_init_val) => {
+                // const array init values...
+                unimplemented!()
             }
         }
     }
 
     fn visit_var_decl(&mut self, var_decl: &ast::VarDecl, scope: &mut Scope) {
-        // do some type check here...?
+        // global decl's lvalue must be a const
         for var_def in &var_decl.var_defs {
             self.visit_var_def(var_def, scope);
         }
@@ -314,7 +301,50 @@ impl Parser {
 
     fn visit_var_def(&mut self, var_def: &ast::VarDef, scope: &mut Scope) {
         if scope.is_global {
-            unimplemented!()
+            match var_def {
+                // with no initial vals
+                ast::VarDef::VarDef(var_ident, const_exps) => {
+                    if const_exps.len() == 0 {
+                        let zero_init = globalvalue!(self, zero_init, Type::get_i32());
+                        let alloc = globalvalue!(self, global_alloc, zero_init);
+                        let mut alloc_name = var_ident.clone();
+                        alloc_name.insert_str(0, "%global_");
+                        self.program.set_value_name(alloc, Some(alloc_name.clone()));
+                        scope
+                            .block_node
+                            .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
+                    } else {
+                        // arrray
+                        unimplemented!()
+                    }
+                }
+                // with initial vals...
+                ast::VarDef::InitVal(var_ident, const_exps, init_val) => {
+                    if const_exps.len() == 0 {
+                        let value = self.visit_init_val(init_val, scope);
+                        let value_data = imglobalvaluedata!(self, value);
+                        // make sure the initval of global value is a const
+                        match value_data.kind() {
+                            ValueKind::Integer(int) => {
+                                let int_val = globalvalue!(self, integer, int.value());
+                                let alloc = globalvalue!(self, global_alloc, int_val);
+                                let mut alloc_name = var_ident.clone();
+                                alloc_name.insert_str(0, "%global_");
+                                self.program.set_value_name(alloc, Some(alloc_name.clone()));
+                                scope
+                                    .block_node
+                                    .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
+                            }
+                            _ => {
+                                panic!("Initval of global value must be a const!")
+                            }
+                        }
+                    } else {
+                        // array
+                        unimplemented!()
+                    }
+                }
+            }
         } else {
             match var_def {
                 // with no initial vals
@@ -360,17 +390,13 @@ impl Parser {
     }
 
     fn visit_init_val(&mut self, init_val: &ast::InitVal, scope: &mut Scope) -> Value {
-        if scope.is_global {
-            unimplemented!()
-        } else {
-            match init_val {
-                ast::InitVal::Exp(exp) => self.visit_exp(exp, scope),
-                ast::InitVal::InitVal(_init_val) => unimplemented!(),
-            }
+        match init_val {
+            ast::InitVal::Exp(exp) => self.visit_exp(exp, scope),
+            ast::InitVal::InitVal(_init_val) => unimplemented!(),
         }
     }
 
-    fn visit_func_def(&mut self, func_def: &crate::ast::FuncDef) {
+    fn visit_func_def(&mut self, func_def: &crate::ast::FuncDef, scope: &mut Scope) {
         let mut sym_func_name = func_def.func_ident.clone();
         sym_func_name.insert(0, '@');
 
@@ -430,9 +456,11 @@ impl Parser {
 
         // new a local symbol table
         let block_node = BlockNode::new();
+        BlockNode::insert_block(scope.global_symbols.clone(), block_node.clone());
 
         // Insert function to global symbol table
-        self.global_symbols
+        scope
+            .global_symbols
             .insert_symbol(func_def.func_ident.clone(), Symbol::Function(function));
 
         // if function has params, store params.
@@ -459,16 +487,15 @@ impl Parser {
             }
         }
 
-        let mut scope = Scope {
-            is_global: false,
-            function: Some(function),
-            basic_block: Some(entry_bb),
-            block_node: block_node,
-            last_nested_bb: None,
-            last_end_exp_bb: None,
-            curr_loop_bb: None,
-        };
-        self.visit_block(&func_def.block, &mut scope);
+        // set scope
+        {
+            scope.is_global = false;
+            scope.function = Some(function);
+            scope.basic_block = Some(entry_bb);
+            scope.block_node = block_node;
+        }
+
+        self.visit_block(&func_def.block, scope);
 
         // If current function has return value
         if matches!(func_def.func_type, ast::Type::Void) {
@@ -982,7 +1009,7 @@ impl Parser {
 
     fn visit_ass_stmt(&mut self, ass_stmt: &ast::AssignStmt, scope: &mut Scope) {
         if scope.is_global {
-            panic!()
+            panic!("Assign statement can not in global scope!")
         } else {
             let value = self.visit_exp(&ass_stmt.exp, scope);
             let ass_l_value_symbol = scope.block_node.lookup_symbol(&ass_stmt.l_val.ident);
@@ -1003,37 +1030,80 @@ impl Parser {
 
     fn visit_l_val(&mut self, l_val: &ast::LVal, scope: &Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
-        } else {
             // look up symbol table...
             let value_symbol = scope.block_node.lookup_symbol(&l_val.ident);
             if let Symbol::Value(value) = value_symbol {
-                let value_data = imvaluedata!(self, scope.function.unwrap(), value);
-
-                if matches!(value_data.kind(), ValueKind::Alloc(_)) {
-                    // Need to load first for alloc
-                    let load = value!(self, scope.function.unwrap(), load, value);
-                    insertvalue!(
-                        self,
-                        scope.function.unwrap(),
-                        scope.basic_block.unwrap(),
-                        [load]
-                    );
-                    load
+                let value_data = imglobalvaluedata!(self, value);
+                // check if it is a const
+                if !matches!(value_data.kind(), ValueKind::Integer(_)) {
+                    panic!("Global left value must be a const!")
                 } else {
                     value
                 }
             } else {
-                panic!("Left value can not be a function yet!")
+                panic!("Left value can not be a function!")
+            }
+        } else {
+            // look up symbol table...
+            let value_symbol = scope.block_node.lookup_symbol(&l_val.ident);
+            if let Symbol::Value(value) = value_symbol {
+                if value.is_global() {
+                    // If it is a const, change it to local value
+                    let value_data = imglobalvaluedata!(self, value);
+                    match value_data.kind() {
+                        ValueKind::Integer(int) => {
+                            value!(self, scope.function.unwrap(), integer, int.value())
+                        }
+                        ValueKind::GlobalAlloc(_alloc) => {
+                            let load = value!(self, scope.function.unwrap(), load, value);
+                            insertvalue!(
+                                self,
+                                scope.function.unwrap(),
+                                scope.basic_block.unwrap(),
+                                [load]
+                            );
+                            load
+                        }
+                        _ => unimplemented!(),
+                    }
+                } else {
+                    let value_data = imvaluedata!(self, scope.function.unwrap(), value);
+
+                    if matches!(value_data.kind(), ValueKind::Alloc(_)) {
+                        // Need to load first for alloc
+                        let load = value!(self, scope.function.unwrap(), load, value);
+                        insertvalue!(
+                            self,
+                            scope.function.unwrap(),
+                            scope.basic_block.unwrap(),
+                            [load]
+                        );
+                        load
+                    } else {
+                        value
+                    }
+                }
+            } else {
+                panic!("Left value can not be a function!")
             }
         }
     }
 
     fn visit_const_exp(&mut self, const_exp: &ast::ConstExp, scope: &mut Scope) -> Value {
-        // should check if it is a const...
         if scope.is_global {
-            unimplemented!()
+            // check if it is a const...
+            let const_value = self.visit_exp(&const_exp.exp, scope);
+            let val_data = imglobalvaluedata!(self, const_value);
+            if let ValueKind::Integer(_) = val_data.kind() {
+                const_value
+            } else {
+                panic!(
+                    "Const expression's rvalue must be a constant, but got: {:#?}",
+                    val_data.kind()
+                )
+            }
         } else {
+            // check if it is a const...
             let const_value = self.visit_exp(&const_exp.exp, scope);
             let val_data = imvaluedata!(self, scope.function.unwrap(), const_value);
             if let ValueKind::Integer(_) = val_data.kind() {
@@ -1053,7 +1123,29 @@ impl Parser {
 
     fn visit_l_or_exp(&mut self, l_or_exp: &ast::LOrExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match l_or_exp {
+                LOrExp::LAndExp(l_and_exp) => self.visit_l_and_exp(l_and_exp, scope),
+                LOrExp::BinaryOp(l_or_exp, l_and_exp) => {
+                    let (l_value, r_value) = (
+                        self.visit_l_or_exp(l_or_exp, scope),
+                        self.visit_l_and_exp(l_and_exp, scope),
+                    );
+                    // check if both lval and rval are const
+                    let l_val_data = imglobalvaluedata!(self, l_value);
+                    let r_val_data = imglobalvaluedata!(self, r_value);
+                    if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                        (l_val_data.kind(), r_val_data.kind())
+                    {
+                        globalvalue!(
+                            self,
+                            integer,
+                            (l_num.value() != 0 || r_num.value() != 0) as i32
+                        )
+                    } else {
+                        panic!("Must be a const!")
+                    }
+                }
+            }
         } else {
             match l_or_exp {
                 LOrExp::LAndExp(l_and_exp) => self.visit_l_and_exp(l_and_exp, scope),
@@ -1213,7 +1305,29 @@ impl Parser {
 
     fn visit_l_and_exp(&mut self, l_and_exp: &ast::LAndExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match l_and_exp {
+                LAndExp::EqExp(eq_exp) => self.visit_eq_exp(eq_exp, scope),
+                LAndExp::BinaryOp(l_and_exp, eq_exp) => {
+                    let (l_value, r_value) = (
+                        self.visit_l_and_exp(l_and_exp, scope),
+                        self.visit_eq_exp(eq_exp, scope),
+                    );
+                    // check if both lval and rval are const
+                    let l_val_data = imglobalvaluedata!(self, l_value);
+                    let r_val_data = imglobalvaluedata!(self, r_value);
+                    if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                        (l_val_data.kind(), r_val_data.kind())
+                    {
+                        globalvalue!(
+                            self,
+                            integer,
+                            (l_num.value() != 0 && r_num.value() != 0) as i32
+                        )
+                    } else {
+                        panic!("Must be a const!")
+                    }
+                }
+            }
         } else {
             match l_and_exp {
                 LAndExp::EqExp(eq_exp) => self.visit_eq_exp(eq_exp, scope),
@@ -1370,7 +1484,46 @@ impl Parser {
 
     fn visit_eq_exp(&mut self, eq_exp: &ast::EqExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match eq_exp {
+                EqExp::RelExp(rel_exp) => self.visit_rel_exp(rel_exp, scope),
+                EqExp::BinaryOp(eq_exp, op, rel_exp) => match op {
+                    Operator::Equal => {
+                        let (l_value, r_value) = (
+                            self.visit_eq_exp(eq_exp, scope),
+                            self.visit_rel_exp(rel_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, (l_num.value() == r_num.value()) as i32)
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    Operator::NotEqual => {
+                        let (l_value, r_value) = (
+                            self.visit_eq_exp(eq_exp, scope),
+                            self.visit_rel_exp(rel_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, (l_num.value() != r_num.value()) as i32)
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    _ => {
+                        panic!("Illegal Operator: {:#?}!", op)
+                    }
+                },
+            }
         } else {
             match eq_exp {
                 EqExp::RelExp(rel_exp) => self.visit_rel_exp(rel_exp, scope),
@@ -1386,13 +1539,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 (l_num.value() == r_num.value()) as i32
-                            );
-                            number_value
+                            )
                         } else {
                             let eq = value!(
                                 self,
@@ -1422,13 +1574,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 (l_num.value() != r_num.value()) as i32
-                            );
-                            number_value
+                            )
                         } else {
                             let not_eq = value!(
                                 self,
@@ -1457,7 +1608,78 @@ impl Parser {
 
     fn visit_rel_exp(&mut self, rel_exp: &ast::RelExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match rel_exp {
+                RelExp::AddExp(add_exp) => self.visit_add_exp(add_exp, scope),
+                RelExp::BinaryOp(rel_exp, op, add_exp) => match op {
+                    Operator::LessThan => {
+                        let (l_value, r_value) = (
+                            self.visit_rel_exp(rel_exp, scope),
+                            self.visit_add_exp(add_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, (l_num.value() < r_num.value()) as i32)
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    Operator::MoreThan => {
+                        let (l_value, r_value) = (
+                            self.visit_rel_exp(rel_exp, scope),
+                            self.visit_add_exp(add_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, (l_num.value() > r_num.value()) as i32)
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    Operator::LessOrEqualThan => {
+                        let (l_value, r_value) = (
+                            self.visit_rel_exp(rel_exp, scope),
+                            self.visit_add_exp(add_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, (l_num.value() <= r_num.value()) as i32)
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    Operator::MoreOrEqualThan => {
+                        let (l_value, r_value) = (
+                            self.visit_rel_exp(rel_exp, scope),
+                            self.visit_add_exp(add_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, (l_num.value() >= r_num.value()) as i32)
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    _ => {
+                        panic!("Illegal Operator: {:#?}!", op)
+                    }
+                },
+            }
         } else {
             match rel_exp {
                 RelExp::AddExp(add_exp) => self.visit_add_exp(add_exp, scope),
@@ -1473,13 +1695,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 (l_num.value() < r_num.value()) as i32
-                            );
-                            number_value
+                            )
                         } else {
                             let lt = value!(
                                 self,
@@ -1509,13 +1730,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 (l_num.value() > r_num.value()) as i32
-                            );
-                            number_value
+                            )
                         } else {
                             let mt = value!(
                                 self,
@@ -1545,13 +1765,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 (l_num.value() <= r_num.value()) as i32
-                            );
-                            number_value
+                            )
                         } else {
                             let le = value!(
                                 self,
@@ -1581,13 +1800,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 (l_num.value() >= r_num.value()) as i32
-                            );
-                            number_value
+                            )
                         } else {
                             let me = value!(
                                 self,
@@ -1616,7 +1834,46 @@ impl Parser {
 
     fn visit_add_exp(&mut self, add_exp: &ast::AddExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match add_exp {
+                AddExp::MulExp(mul_exp) => self.visit_mul_exp(mul_exp, scope),
+                AddExp::BinaryOp(add_exp, op, mul_exp) => match op {
+                    Operator::Add => {
+                        let (l_value, r_value) = (
+                            self.visit_add_exp(add_exp, scope),
+                            self.visit_mul_exp(mul_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, l_num.value() + r_num.value())
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    Operator::Subtract => {
+                        let (l_value, r_value) = (
+                            self.visit_add_exp(add_exp, scope),
+                            self.visit_mul_exp(mul_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, l_num.value() - r_num.value())
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    _ => {
+                        panic!("Illegal Operator: {:#?}!", op)
+                    }
+                },
+            }
         } else {
             match add_exp {
                 AddExp::MulExp(mul_exp) => self.visit_mul_exp(mul_exp, scope),
@@ -1632,13 +1889,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 l_num.value() + r_num.value()
-                            );
-                            number_value
+                            )
                         } else {
                             let add = value!(
                                 self,
@@ -1668,13 +1924,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 l_num.value() - r_num.value()
-                            );
-                            number_value
+                            )
                         } else {
                             let sub = value!(
                                 self,
@@ -1703,7 +1958,62 @@ impl Parser {
 
     fn visit_mul_exp(&mut self, mul_exp: &ast::MulExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match mul_exp {
+                MulExp::UnaryExp(unary_exp) => self.visit_unary_exp(unary_exp, scope),
+                MulExp::BinaryOp(mul_exp, op, unary_exp) => match op {
+                    Operator::Multiply => {
+                        let (l_value, r_value) = (
+                            self.visit_mul_exp(mul_exp, scope),
+                            self.visit_unary_exp(unary_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, l_num.value() * r_num.value())
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    Operator::Divide => {
+                        let (l_value, r_value) = (
+                            self.visit_mul_exp(mul_exp, scope),
+                            self.visit_unary_exp(unary_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, l_num.value() / r_num.value())
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    Operator::GetRemainder => {
+                        let (l_value, r_value) = (
+                            self.visit_mul_exp(mul_exp, scope),
+                            self.visit_unary_exp(unary_exp, scope),
+                        );
+                        // check if both lval and rval are const
+                        let l_val_data = imglobalvaluedata!(self, l_value);
+                        let r_val_data = imglobalvaluedata!(self, r_value);
+                        if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
+                            (l_val_data.kind(), r_val_data.kind())
+                        {
+                            globalvalue!(self, integer, l_num.value() % r_num.value())
+                        } else {
+                            panic!("Must be a const!")
+                        }
+                    }
+                    _ => {
+                        panic!("Illegal Operator: {:#?}!", op)
+                    }
+                },
+            }
         } else {
             match mul_exp {
                 MulExp::UnaryExp(unary_exp) => self.visit_unary_exp(unary_exp, scope),
@@ -1719,13 +2029,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 l_num.value() * r_num.value()
-                            );
-                            number_value
+                            )
                         } else {
                             let mul = value!(
                                 self,
@@ -1755,13 +2064,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 l_num.value() / r_num.value()
-                            );
-                            number_value
+                            )
                         } else {
                             let div = value!(
                                 self,
@@ -1791,13 +2099,12 @@ impl Parser {
                         if let (ValueKind::Integer(l_num), ValueKind::Integer(r_num)) =
                             (l_val_data.kind(), r_val_data.kind())
                         {
-                            let number_value = value!(
+                            value!(
                                 self,
                                 scope.function.unwrap(),
                                 integer,
                                 l_num.value() % r_num.value()
-                            );
-                            number_value
+                            )
                         } else {
                             let mod_value = value!(
                                 self,
@@ -1826,7 +2133,46 @@ impl Parser {
 
     fn visit_unary_exp(&mut self, unary_exp: &ast::UnaryExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match unary_exp {
+                UnaryExp::PrimaryExp(primary_exp) => self.visit_primary_exp(primary_exp, scope),
+                UnaryExp::FuncCall(_, _) => {
+                    panic!("Could not be a function call in global symbols!")
+                }
+                UnaryExp::UnaryOp(op, unary_exp) => match op {
+                    Operator::Add => self.visit_unary_exp(unary_exp, scope),
+                    Operator::Subtract => {
+                        let value = self.visit_unary_exp(unary_exp, scope);
+
+                        // check if value is a const
+                        let value_data = imglobalvaluedata!(self, value);
+                        match value_data.kind() {
+                            ValueKind::Integer(integer) => {
+                                globalvalue!(self, integer, -integer.value())
+                            }
+                            _ => {
+                                panic!("Must be a const!")
+                            }
+                        }
+                    }
+                    Operator::Not => {
+                        let value = self.visit_unary_exp(unary_exp, scope);
+
+                        // check if value is a const
+                        let value_data = imglobalvaluedata!(self, value);
+                        match value_data.kind() {
+                            ValueKind::Integer(integer) => {
+                                globalvalue!(self, integer, (integer.value() == 0) as i32)
+                            }
+                            _ => {
+                                panic!("Must be a const!")
+                            }
+                        }
+                    }
+                    _ => {
+                        panic!("Illegal Operator: {:#?}!", op)
+                    }
+                },
+            }
         } else {
             match unary_exp {
                 UnaryExp::PrimaryExp(primary_exp) => self.visit_primary_exp(primary_exp, scope),
@@ -1838,7 +2184,7 @@ impl Parser {
                             args.push(arg_value);
                         }
                     }
-                    let callee_symbol = self.global_symbols.lookup_symbol(func_name);
+                    let callee_symbol = scope.global_symbols.lookup_symbol(func_name);
                     if let Symbol::Function(callee) = callee_symbol {
                         let call_value = value!(self, scope.function.unwrap(), call, callee, args);
                         insertvalue!(
@@ -1861,13 +2207,7 @@ impl Parser {
                         let value_data = imvaluedata!(self, scope.function.unwrap(), value);
                         match value_data.kind() {
                             ValueKind::Integer(integer) => {
-                                let number_value = value!(
-                                    self,
-                                    scope.function.unwrap(),
-                                    integer,
-                                    -integer.value()
-                                );
-                                number_value
+                                value!(self, scope.function.unwrap(), integer, -integer.value())
                             }
                             _ => {
                                 let zero_value = value!(self, scope.function.unwrap(), integer, 0);
@@ -1896,13 +2236,12 @@ impl Parser {
                         let value_data = imvaluedata!(self, scope.function.unwrap(), value);
                         match value_data.kind() {
                             ValueKind::Integer(integer) => {
-                                let number_value = value!(
+                                value!(
                                     self,
                                     scope.function.unwrap(),
                                     integer,
                                     (integer.value() == 0) as i32
-                                );
-                                number_value
+                                )
                             }
                             _ => {
                                 let zero_value = value!(self, scope.function.unwrap(), integer, 0);
@@ -1934,15 +2273,22 @@ impl Parser {
 
     fn visit_primary_exp(&mut self, primary_exp: &ast::PrimaryExp, scope: &mut Scope) -> Value {
         if scope.is_global {
-            unimplemented!()
+            match primary_exp {
+                PrimaryExp::Exp(exp) => self.visit_exp(exp, scope),
+                PrimaryExp::Number(number) => match number {
+                    Number::IntConst(int_const) => {
+                        let number_value = globalvalue!(self, integer, *int_const);
+                        number_value
+                    }
+                },
+                PrimaryExp::LVal(l_val) => self.visit_l_val(l_val, scope),
+            }
         } else {
             match primary_exp {
                 PrimaryExp::Exp(exp) => self.visit_exp(exp, scope),
                 PrimaryExp::Number(number) => match number {
                     Number::IntConst(int_const) => {
-                        let number_value =
-                            value!(self, scope.function.unwrap(), integer, *int_const);
-                        number_value
+                        value!(self, scope.function.unwrap(), integer, *int_const)
                     }
                 },
                 PrimaryExp::LVal(l_val) => self.visit_l_val(l_val, scope),
@@ -1953,48 +2299,13 @@ impl Parser {
 
 impl Parser {
     pub fn new() -> Parser {
-        let mut parser = Parser {
+        Parser {
             program: Program::new(),
             bb_number: HashMap::new(),
             bbs_status: HashMap::new(),
             end_bbs: HashMap::new(),
-            global_symbols: BlockNode::new(),
             has_ret_statements: vec![],
-        };
-        {
-                    // insert sysy lib function
-
-            // decl @getint(): i32
-            let getint = parser.program.new_func(FunctionData::new_decl("@getint".to_string(), vec![], Type::get_i32()));
-            parser.global_symbols.insert_symbol("getint".to_string(), Symbol::Function(getint));
-
-            // decl @getch(): i32
-            let getch = parser.program.new_func(FunctionData::new_decl("@getch".to_string(), vec![], Type::get_i32()));
-            parser.global_symbols.insert_symbol("getch".to_string(), Symbol::Function(getch));
-
-            // decl @getarray(*i32): i32
-            //parser.program.new_func(FunctionData::new_decl("@getarray".to_string(), vec![Type::get_pointer(Type::get_i32())], Type::get_i32()));
-
-            // decl @putint(i32)
-            let putint = parser.program.new_func(FunctionData::new_decl("@putint".to_string(), vec![Type::get_i32()], Type::get_unit()));
-            parser.global_symbols.insert_symbol("putint".to_string(), Symbol::Function(putint));
-
-            // decl @putch(i32)
-            let putch = parser.program.new_func(FunctionData::new_decl("@putch".to_string(), vec![Type::get_i32()], Type::get_unit()));
-            parser.global_symbols.insert_symbol("putch".to_string(), Symbol::Function(putch));
-
-            // decl @putarray(i32, *i32)
-            //let get_int = FunctionData::new_decl("@get_int".to_string(), vec![], Type::get_i32());
-
-            // decl @starttime()
-            let starttime = parser.program.new_func(FunctionData::new_decl("@starttime".to_string(), vec![], Type::get_unit()));
-            parser.global_symbols.insert_symbol("starttime".to_string(), Symbol::Function(starttime));
-
-            // decl @stoptime()
-            let stoptime = parser.program.new_func(FunctionData::new_decl("@stoptime".to_string(), vec![], Type::get_unit()));
-            parser.global_symbols.insert_symbol("stoptime".to_string(), Symbol::Function(stoptime));
         }
-        parser
     }
 
     pub fn get_new_bb_number(&mut self, function: Function) -> String {
@@ -2006,7 +2317,88 @@ impl Parser {
     pub fn parse(&mut self, source_code: &String) -> Result<&Program, Box<dyn Error>> {
         let ast = sysy::CompUnitParser::new().parse(&source_code).unwrap();
         //println!("{:#?}", ast);
-        self.visit_comp_unit(&ast);
+        let global_block_node = BlockNode::new();
+        let mut scope = Scope {
+            is_global: true,
+            function: None,
+            basic_block: None,
+            block_node: global_block_node.clone(),
+            global_symbols: global_block_node.clone(),
+            last_nested_bb: None,
+            last_end_exp_bb: None,
+            curr_loop_bb: None,
+        };
+
+        {
+            // insert sysy lib function
+
+            // decl @getint(): i32
+            let getint = self.program.new_func(FunctionData::new_decl(
+                "@getint".to_string(),
+                vec![],
+                Type::get_i32(),
+            ));
+            scope
+                .global_symbols
+                .insert_symbol("getint".to_string(), Symbol::Function(getint));
+
+            // decl @getch(): i32
+            let getch = self.program.new_func(FunctionData::new_decl(
+                "@getch".to_string(),
+                vec![],
+                Type::get_i32(),
+            ));
+            scope
+                .global_symbols
+                .insert_symbol("getch".to_string(), Symbol::Function(getch));
+
+            // decl @getarray(*i32): i32
+            //parser.program.new_func(FunctionData::new_decl("@getarray".to_string(), vec![Type::get_pointer(Type::get_i32())], Type::get_i32()));
+
+            // decl @putint(i32)
+            let putint = self.program.new_func(FunctionData::new_decl(
+                "@putint".to_string(),
+                vec![Type::get_i32()],
+                Type::get_unit(),
+            ));
+            scope
+                .global_symbols
+                .insert_symbol("putint".to_string(), Symbol::Function(putint));
+
+            // decl @putch(i32)
+            let putch = self.program.new_func(FunctionData::new_decl(
+                "@putch".to_string(),
+                vec![Type::get_i32()],
+                Type::get_unit(),
+            ));
+            scope
+                .global_symbols
+                .insert_symbol("putch".to_string(), Symbol::Function(putch));
+
+            // decl @putarray(i32, *i32)
+            //let get_int = FunctionData::new_decl("@get_int".to_string(), vec![], Type::get_i32());
+
+            // decl @starttime()
+            let starttime = self.program.new_func(FunctionData::new_decl(
+                "@starttime".to_string(),
+                vec![],
+                Type::get_unit(),
+            ));
+            scope
+                .global_symbols
+                .insert_symbol("starttime".to_string(), Symbol::Function(starttime));
+
+            // decl @stoptime()
+            let stoptime = self.program.new_func(FunctionData::new_decl(
+                "@stoptime".to_string(),
+                vec![],
+                Type::get_unit(),
+            ));
+            scope
+                .global_symbols
+                .insert_symbol("stoptime".to_string(), Symbol::Function(stoptime));
+        }
+        self.visit_comp_unit(&ast, &mut scope);
         self.remove_unused_bb();
         Ok(&self.program)
     }

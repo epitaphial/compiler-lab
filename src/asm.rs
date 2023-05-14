@@ -5,7 +5,27 @@ use koopa::ir::Value;
 #[derive(Default, Debug)]
 pub struct AsmProgram {
     functions: Vec<AsmFunction>,
+    pub datas: HashMap<String, Vec<DataSymbol>>,
     // other symbols...
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DataSymbol {
+    Zero(u32),
+    Word(i32),
+}
+
+impl DataSymbol {
+    fn to_riscv_string(self) -> String {
+        match self {
+            DataSymbol::Zero(size) => {
+                format!(".zero {}", size)
+            }
+            DataSymbol::Word(word) => {
+                format!(".word {}", word)
+            }
+        }
+    }
 }
 
 impl AsmProgram {
@@ -19,6 +39,17 @@ impl AsmProgram {
 
     pub fn gen_asm(&self) -> String {
         let mut asm_str = String::new();
+        // generate for data
+        for (global_symbol, datas) in &self.datas {
+            asm_str.push_str("  .data\n");
+            asm_str.push_str(format!("  .globl {}\n", global_symbol).as_str());
+            asm_str.push_str(format!("{}:\n", global_symbol).as_str());
+            for data in datas {
+                asm_str.push_str(format!("  {}\n", data.clone().to_riscv_string()).as_str());
+            }
+        }
+
+        // generate for function
         for asm_func in &self.functions {
             asm_str.push_str("  .text\n");
 
@@ -151,7 +182,7 @@ impl Stack {
     }
 }
 
-// For each fucntion, there must be a hashmap to store the values stack location.
+// For each function, there must be a hashmap to store the values stack location.
 #[derive(Default, Debug)]
 pub struct AsmFunction {
     func_name: String,
@@ -211,6 +242,7 @@ pub enum AsmInstruction {
     J(String),
     Call(String),
     Li(Register, i32),
+    La(Register, String),
     Beqz(Register, String),
     Seqz(Register, Register),
     Snez(Register, Register),
@@ -244,6 +276,9 @@ impl AsmInstruction {
             }
             AsmInstruction::Li(reg, imm) => {
                 format!("li {}, {}", reg.to_riscv_string(), imm)
+            }
+            AsmInstruction::La(reg, symbol) => {
+                format!("la {}, {}", reg.to_riscv_string(), symbol)
             }
             AsmInstruction::Lw(reg1, reg2, pos) => {
                 format!(

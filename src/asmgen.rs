@@ -9,7 +9,7 @@ use koopa::ir::{
 };
 
 use crate::asm::{
-    ArgType, AsmBasicBlock, AsmFunction, AsmInstruction, AsmProgram, Layout, Register,
+    ArgType, AsmBasicBlock, AsmFunction, AsmInstruction, AsmProgram, DataSymbol, Layout, Register,
 };
 
 trait AsmGenerator {
@@ -45,8 +45,40 @@ trait AsmGenerator {
 impl AsmGenerator for Program {
     fn generate_program(&self) -> AsmProgram {
         let mut asm_prog = AsmProgram::new();
+        // generate for global data
+        for global_value in self.inst_layout() {
+            let value_data = self.borrow_value(*global_value);
+            match value_data.kind() {
+                ValueKind::GlobalAlloc(alloc) => {
+                    let init_value = alloc.init();
+                    let init_value_data = self.borrow_value(init_value);
+                    match init_value_data.kind() {
+                        ValueKind::Integer(int) => {
+                            asm_prog.datas.insert(
+                                value_data.name().clone().unwrap()[1..].to_string(),
+                                vec![DataSymbol::Word(int.value())],
+                            );
+                        }
+                        ValueKind::ZeroInit(_zero) => {
+                            asm_prog.datas.insert(
+                                value_data.name().clone().unwrap()[1..].to_string(),
+                                vec![DataSymbol::Zero(4)],
+                            );
+                        }
+                        _ => {
+                            panic!("Can not be other kind!")
+                        }
+                    }
+                }
+                _ => {
+                    unimplemented!()
+                }
+            }
+        }
+
+        // generate for function
         for (_, func_data) in self.funcs() {
-            if func_data.layout().entry_bb() != None{
+            if func_data.layout().entry_bb() != None {
                 asm_prog.push_func(func_data.generate_function(self));
             }
         }
@@ -442,16 +474,27 @@ impl AsmGenerator for ValueData {
                 asm_insts.push(AsmInstruction::Ret);
             }
             ValueKind::Load(load) => {
-                let src_value = self.get_value(func_data, &load.src(), layout);
-                if let AsmValue::StackPos(pos) = src_value {
-                    // lw t0, imm(sp)
-                    asm_insts.push(AsmInstruction::Lw(
+                if load.src().is_global() {
+                    // la t0, symbol
+                    let src_value_data = program.borrow_value(load.src());
+                    asm_insts.push(AsmInstruction::La(
                         Register::Temp(0),
-                        Register::StackPointer,
-                        pos as i32,
+                        src_value_data.name().clone().unwrap()[1..].to_string(),
                     ));
+                    // lw t0, 0(t0)
+                    asm_insts.push(AsmInstruction::Lw(Register::Temp(0), Register::Temp(0), 0));
                 } else {
-                    panic!("Can't load this type!")
+                    let src_value = self.get_value(func_data, &load.src(), layout);
+                    if let AsmValue::StackPos(pos) = src_value {
+                        // lw t0, imm(sp)
+                        asm_insts.push(AsmInstruction::Lw(
+                            Register::Temp(0),
+                            Register::StackPointer,
+                            pos as i32,
+                        ));
+                    } else {
+                        panic!("Can't load this type!")
+                    }
                 }
                 // sw t0, imm(sp)
                 asm_insts.push(AsmInstruction::Sw(
@@ -463,49 +506,88 @@ impl AsmGenerator for ValueData {
             }
             ValueKind::Store(store) => {
                 let src_value = self.get_value(func_data, &store.value(), layout);
-                let dest_value = self.get_value(func_data, &store.dest(), layout);
-                match dest_value {
-                    AsmValue::StackPos(dest_pos) => {
-                        match src_value {
-                            AsmValue::Literal(src_lit) => {
-                                // li t0, imm
-                                asm_insts.push(AsmInstruction::Li(Register::Temp(0), src_lit));
-                                // sw t0, imm(sp)
-                                asm_insts.push(AsmInstruction::Sw(
-                                    Register::Temp(0),
-                                    Register::StackPointer,
-                                    dest_pos as i32,
-                                ));
-                            }
-                            AsmValue::StackPos(src_pos) => {
-                                // lw t0, imm(sp)
-                                asm_insts.push(AsmInstruction::Lw(
-                                    Register::Temp(0),
-                                    Register::StackPointer,
-                                    src_pos as i32,
-                                ));
-                                // sw t0, imm(sp)
-                                asm_insts.push(AsmInstruction::Sw(
-                                    Register::Temp(0),
-                                    Register::StackPointer,
-                                    dest_pos as i32,
-                                ));
-                            }
-                            AsmValue::Register(reg) => {
-                                // sw a[0-7], imm(sp)
-                                asm_insts.push(AsmInstruction::Sw(
-                                    reg,
-                                    Register::StackPointer,
-                                    dest_pos as i32,
-                                ));
-                            }
+                if store.dest().is_global() {
+                    // la t0, symbol
+                    let dest_value_data = program.borrow_value(store.dest());
+                    asm_insts.push(AsmInstruction::La(
+                        Register::Temp(0),
+                        dest_value_data.name().clone().unwrap()[1..].to_string(),
+                    ));
+                    match src_value {
+                        AsmValue::Literal(src_lit) => {
+                            // li t1, imm
+                            asm_insts.push(AsmInstruction::Li(Register::Temp(1), src_lit));
+                            // sw t1, 0(t0)
+                            asm_insts.push(AsmInstruction::Sw(
+                                Register::Temp(1),
+                                Register::Temp(0),
+                                0,
+                            ));
+                        }
+                        AsmValue::StackPos(src_pos) => {
+                            // lw t1, imm(sp)
+                            asm_insts.push(AsmInstruction::Lw(
+                                Register::Temp(1),
+                                Register::StackPointer,
+                                src_pos as i32,
+                            ));
+                            // sw t1, 0(t0)
+                            asm_insts.push(AsmInstruction::Sw(
+                                Register::Temp(1),
+                                Register::Temp(0),
+                                0,
+                            ));
+                        }
+                        AsmValue::Register(reg) => {
+                            // sw a[0-7], 0(t0)
+                            asm_insts.push(AsmInstruction::Sw(reg, Register::Temp(0), 0));
                         }
                     }
-                    AsmValue::Literal(_lit) => {
-                        panic!("Cant be this!")
-                    }
-                    _ => {
-                        unimplemented!()
+                } else {
+                    let dest_value = self.get_value(func_data, &store.dest(), layout);
+                    match dest_value {
+                        AsmValue::StackPos(dest_pos) => {
+                            match src_value {
+                                AsmValue::Literal(src_lit) => {
+                                    // li t0, imm
+                                    asm_insts.push(AsmInstruction::Li(Register::Temp(0), src_lit));
+                                    // sw t0, imm(sp)
+                                    asm_insts.push(AsmInstruction::Sw(
+                                        Register::Temp(0),
+                                        Register::StackPointer,
+                                        dest_pos as i32,
+                                    ));
+                                }
+                                AsmValue::StackPos(src_pos) => {
+                                    // lw t0, imm(sp)
+                                    asm_insts.push(AsmInstruction::Lw(
+                                        Register::Temp(0),
+                                        Register::StackPointer,
+                                        src_pos as i32,
+                                    ));
+                                    // sw t0, imm(sp)
+                                    asm_insts.push(AsmInstruction::Sw(
+                                        Register::Temp(0),
+                                        Register::StackPointer,
+                                        dest_pos as i32,
+                                    ));
+                                }
+                                AsmValue::Register(reg) => {
+                                    // sw a[0-7], imm(sp)
+                                    asm_insts.push(AsmInstruction::Sw(
+                                        reg,
+                                        Register::StackPointer,
+                                        dest_pos as i32,
+                                    ));
+                                }
+                            }
+                        }
+                        AsmValue::Literal(_lit) => {
+                            panic!("Cant be this!")
+                        }
+                        _ => {
+                            unimplemented!()
+                        }
                     }
                 }
             }

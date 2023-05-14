@@ -1,0 +1,13 @@
+"filename", "language", "TOML", "Rust", "Markdown", "x86 and x86_64 Assembly", "C", "LALRPOP", "comment", "blank", "total"
+"/home/curled/Mycode/compiler-lab/Cargo.toml", "TOML", 12, 0, 0, 0, 0, 0, 1, 5, 18
+"/home/curled/Mycode/compiler-lab/README.md", "Markdown", 0, 0, 1, 0, 0, 0, 0, 1, 2
+"/home/curled/Mycode/compiler-lab/build.rs", "Rust", 0, 4, 0, 0, 0, 0, 0, 2, 6
+"/home/curled/Mycode/compiler-lab/src/asm.rs", "Rust", 0, 345, 0, 0, 0, 0, 5, 30, 380
+"/home/curled/Mycode/compiler-lab/src/asmgen.rs", "Rust", 0, 559, 0, 0, 0, 0, 62, 29, 650
+"/home/curled/Mycode/compiler-lab/src/ast.rs", "Rust", 0, 186, 0, 0, 0, 0, 44, 36, 266
+"/home/curled/Mycode/compiler-lab/src/main.rs", "Rust", 0, 29, 0, 0, 0, 0, 0, 5, 34
+"/home/curled/Mycode/compiler-lab/src/parser.rs", "Rust", 0, 1841, 0, 0, 0, 0, 173, 189, 2203
+"/home/curled/Mycode/compiler-lab/src/sysy.lalrpop", "LALRPOP", 0, 0, 0, 0, 0, 227, 49, 46, 322
+"/home/curled/Mycode/compiler-lab/test_koopa/hello.c", "C", 0, 0, 0, 0, 7, 0, 1, 1, 9
+"/home/curled/Mycode/compiler-lab/test_koopa/hello.s", "x86 and x86_64 Assembly", 0, 0, 0, 192, 0, 0, 0, 9, 201
+"Total", "-", 12, 2964, 1, 192, 7, 227, 335, 353, 4091
