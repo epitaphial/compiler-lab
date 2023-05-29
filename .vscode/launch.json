@@ -19,7 +19,12 @@
                     "kind": "bin"
                 }
             },
-            "args": [],
+            "args": [
+                "-koopa",
+                "test_koopa/hello.c",
+                "-o",
+                "test_koopa/hello.koopa",
+            ],
             "cwd": "${workspaceFolder}"
         },
         {

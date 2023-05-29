@@ -1,17 +1,25 @@
-int x;
-const int y = 10;
-const int z = y + 1;
-int init = 1;
+void f1d(int arr[])
+{
+    int i = 0;
+    while (i < 10)
+    {
+        arr[i] = i;
+        i = i + 1;
+    }
+}
+
+void f2d(int arr[][8 + 2])
+{
+    arr[1][2] = 3;
+    int i = 0;
+    while (i < 10)
+    {
+        f1d(arr[i]);
+        i = i + 1;
+    }
+}
 
 int main()
 {
-  putint(x);
-  putch(32);
-  putint(y);
-  putch(32);
-  putint(z);
-  putch(32);
-  putint(init);
-  putch(10);
-  return 0;
+    return 33;
 }

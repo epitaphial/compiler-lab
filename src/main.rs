@@ -11,6 +11,7 @@ use parser::Parser;
 extern crate lalrpop_util;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // need to check length and args...
     let args: Vec<String> = env::args().collect();
     let input_name = &args[2];
     let output_mode = &args[1];

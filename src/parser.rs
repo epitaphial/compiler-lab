@@ -29,9 +29,10 @@ struct BlockNode {
     pub childs: RefCell<Vec<Rc<BlockNode>>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Symbol {
     Value(Value),
+    Array(Value, Vec<i32>),
     Function(Function),
 }
 
@@ -50,13 +51,13 @@ impl BlockNode {
 
     pub fn lookup_symbol(&self, name: &String) -> Symbol {
         if let Some(symbol) = self.symbols.borrow().get(name) {
-            *symbol
+            symbol.clone()
         } else {
             let mut op_parent = (*self.parent.borrow()).clone();
             while let Some(parent) = &op_parent {
                 // find symbols
                 if let Some(symbol) = (*parent.upgrade().unwrap()).symbols.borrow().get(name) {
-                    return *symbol;
+                    return symbol.clone();
                 } else {
                     op_parent = (*parent.clone().upgrade().unwrap()).parent.borrow().clone();
                 }
@@ -76,6 +77,12 @@ enum BBStatus {
     Pushable,         // Current bb is pushable
     Branched, // Current bb already branched or jumped or returned, and can not push more value
     JumpToLastNested, // Current bb is pushable, but can only push value before the jump value. In the end of an "end branch" bb of if statement or whilestatement, we need to jump back to last if's "end branch" basicblock or last while's "while entry branch" basicblock, we need this(ugly design...), but if current end bb already has an branch value(ret br jump...), we dont need this field.
+}
+
+#[derive(Debug, Clone)]
+enum InitListVal {
+    Exp(Value),
+    InitArray(Vec<InitListVal>),
 }
 
 pub struct Parser {
@@ -265,29 +272,174 @@ impl Parser {
         }
     }
 
+    fn regularization_init_list(
+        &mut self,
+        dim_array: Vec<i32>,
+        init_array: Vec<InitListVal>,
+        scope: &Scope,
+    ) -> Vec<Value> {
+        if dim_array.len() == 0 {
+            panic!("Can not be a empty array!")
+        }
+        let mut edge = 0;
+        let mut new_init_array: Vec<Value> = vec![];
+        let mut dim_mul_all = 1;
+        for dim in &dim_array {
+            dim_mul_all *= dim;
+        }
+        for init_val in init_array {
+            match init_val {
+                InitListVal::InitArray(inner_list_array) => {
+                    if edge % dim_array.last().unwrap() == 0 {
+                        if edge == 0 {
+                            let new_dim_array = dim_array[1..].to_vec();
+                            let new_inner_array = self.regularization_init_list(
+                                new_dim_array.clone(),
+                                inner_list_array,
+                                scope,
+                            );
+                            new_init_array.extend(new_inner_array);
+                            let mut dim_mul = 1;
+                            for dim in new_dim_array {
+                                dim_mul *= dim;
+                            }
+                            edge += dim_mul;
+                        } else {
+                            // calc the edge
+                            let mut edge_index: i32 = dim_array.len() as i32 - 1;
+                            let mut dim_mul = 1;
+                            while edge % dim_mul == 0 {
+                                dim_mul *= dim_array[edge_index as usize];
+                                edge_index -= 1;
+                            }
+                            if edge_index == dim_array.len() as i32 - 2 {
+                                panic!("Must align to the edge!")
+                            } else {
+                                let new_dim_array = dim_array[(edge_index + 2) as usize..].to_vec();
+                                let new_inner_array = self.regularization_init_list(
+                                    new_dim_array,
+                                    inner_list_array,
+                                    scope,
+                                );
+                                new_init_array.extend(new_inner_array);
+                                edge += dim_mul / dim_array[(edge_index + 1) as usize];
+                            }
+                        }
+                    } else {
+                        panic!("Must align to the edge!")
+                    }
+                }
+                InitListVal::Exp(list_value) => {
+                    new_init_array.push(list_value);
+                    edge += 1;
+                }
+            }
+        }
+
+        // fill with zero
+        for _index in 0..dim_mul_all - edge {
+            let zero_value = if scope.is_global {
+                globalvalue!(self, integer, 0)
+            } else {
+                value!(self, scope.function.unwrap(), integer, 0)
+            };
+            new_init_array.push(zero_value);
+        }
+        new_init_array
+    }
+
     fn visit_const_def(&mut self, const_def: &ast::ConstDef, scope: &mut Scope) {
         if const_def.const_exps.len() == 0 {
             // define a const value
-            let value = self.visit_const_init_val(&const_def.const_init_val, scope);
-            scope
-                .block_node
-                .insert_symbol(const_def.const_ident.clone(), Symbol::Value(value));
+            if let InitListVal::Exp(value) =
+                self.visit_const_init_val(&const_def.const_init_val, scope)
+            {
+                scope
+                    .block_node
+                    .insert_symbol(const_def.const_ident.clone(), Symbol::Value(value));
+            } else {
+                panic!("Can not be array!")
+            }
         } else {
             // define a const array
-            unimplemented!()
+            let init_array = self.visit_const_init_val(&const_def.const_init_val, scope);
+
+            let mut dimension_array = vec![];
+            for const_exp in &const_def.const_exps {
+                let dim_value = self.visit_const_exp(const_exp, scope);
+                let value_data = if dim_value.is_global() {
+                    imglobalvaluedata!(self, dim_value)
+                } else {
+                    imvaluedata!(self, scope.function.unwrap(), dim_value)
+                };
+                if let ValueKind::Integer(dim_len) = value_data.kind() {
+                    dimension_array.push(dim_len.value())
+                }
+            }
+            if let InitListVal::InitArray(init_array) = init_array {
+                let regularized_init_list =
+                    self.regularization_init_list(dimension_array.clone(), init_array, scope);
+                let mut array_len = 1;
+                for dim in &dimension_array {
+                    array_len *= dim;
+                }
+
+                if scope.is_global {
+                    // global const array
+                    let aggregate = globalvalue!(self, aggregate, regularized_init_list);
+                    let alloc = globalvalue!(self, global_alloc, aggregate);
+                    let mut alloc_name = const_def.const_ident.clone();
+                    alloc_name.insert_str(0, "%global_");
+                    self.program.set_value_name(alloc, Some(alloc_name.clone()));
+                    scope.block_node.insert_symbol(
+                        const_def.const_ident.clone(),
+                        Symbol::Array(alloc, dimension_array),
+                    );
+                } else {
+                    let aggregate = value!(
+                        self,
+                        scope.function.unwrap(),
+                        aggregate,
+                        regularized_init_list
+                    );
+                    let array_type = Type::get_array(Type::get_i32(), array_len as usize);
+                    let alloc = value!(self, scope.function.unwrap(), alloc, array_type);
+                    let store = value!(self, scope.function.unwrap(), store, aggregate, alloc);
+                    insertvalue!(
+                        self,
+                        scope.function.unwrap(),
+                        scope.basic_block.unwrap(),
+                        [alloc, store]
+                    );
+                    scope.block_node.insert_symbol(
+                        const_def.const_ident.clone(),
+                        Symbol::Array(alloc, dimension_array),
+                    );
+                }
+            } else {
+                panic!("Must be an array!")
+            }
         }
     }
 
     fn visit_const_init_val(
         &mut self,
-        cons_init_val: &ast::ConstInitVal,
+        const_init_val: &ast::ConstInitVal,
         scope: &mut Scope,
-    ) -> Value {
-        match cons_init_val {
-            ast::ConstInitVal::ConstExp(const_exp) => self.visit_const_exp(const_exp, scope),
-            ast::ConstInitVal::ConstInitVal(_const_init_val) => {
+    ) -> InitListVal {
+        match const_init_val {
+            ast::ConstInitVal::ConstExp(const_exp) => {
+                InitListVal::Exp(self.visit_const_exp(const_exp, scope))
+            }
+            ast::ConstInitVal::ConstInitVal(const_init_val) => {
                 // const array init values...
-                unimplemented!()
+                let mut init_array = vec![];
+                if let Some(vals) = const_init_val {
+                    for val in vals {
+                        init_array.push(self.visit_const_init_val(val, scope))
+                    }
+                }
+                InitListVal::InitArray(init_array)
             }
         }
     }
@@ -315,33 +467,83 @@ impl Parser {
                             .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
                     } else {
                         // arrray
-                        unimplemented!()
+                        let mut dim_array = vec![];
+                        for const_exp in const_exps {
+                            let dim = self.visit_const_exp(const_exp, scope);
+                            if let ValueKind::Integer(int) = imglobalvaluedata!(self, dim).kind() {
+                                dim_array.push(int.value());
+                            } else {
+                                panic!("Must be a const!")
+                            }
+                        }
+                        // calc space to alloc
+                        let mut array_len = 1;
+                        for dim in &dim_array {
+                            array_len *= dim;
+                        }
+                        let array_type = Type::get_array(Type::get_i32(), array_len as usize);
+                        let zeroinit = globalvalue!(self, zero_init, array_type);
+                        let alloc = globalvalue!(self, global_alloc, zeroinit);
+                        let mut alloc_name = var_ident.clone();
+                        alloc_name.insert_str(0, "%global_");
+                        self.program.set_value_name(alloc, Some(alloc_name.clone()));
+                        scope
+                            .block_node
+                            .insert_symbol(var_ident.clone(), Symbol::Array(alloc, dim_array));
                     }
                 }
                 // with initial vals...
                 ast::VarDef::InitVal(var_ident, const_exps, init_val) => {
                     if const_exps.len() == 0 {
-                        let value = self.visit_init_val(init_val, scope);
-                        let value_data = imglobalvaluedata!(self, value);
-                        // make sure the initval of global value is a const
-                        match value_data.kind() {
-                            ValueKind::Integer(int) => {
-                                let int_val = globalvalue!(self, integer, int.value());
-                                let alloc = globalvalue!(self, global_alloc, int_val);
-                                let mut alloc_name = var_ident.clone();
-                                alloc_name.insert_str(0, "%global_");
-                                self.program.set_value_name(alloc, Some(alloc_name.clone()));
-                                scope
-                                    .block_node
-                                    .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
-                            }
-                            _ => {
-                                panic!("Initval of global value must be a const!")
+                        if let InitListVal::Exp(value) = self.visit_init_val(init_val, scope) {
+                            let value_data = imglobalvaluedata!(self, value);
+                            // make sure the initval of global value is a const
+                            match value_data.kind() {
+                                ValueKind::Integer(int) => {
+                                    let int_val = globalvalue!(self, integer, int.value());
+                                    let alloc = globalvalue!(self, global_alloc, int_val);
+                                    let mut alloc_name = var_ident.clone();
+                                    alloc_name.insert_str(0, "%global_");
+                                    self.program.set_value_name(alloc, Some(alloc_name.clone()));
+                                    scope
+                                        .block_node
+                                        .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
+                                }
+                                _ => {
+                                    panic!("Initval of global value must be a const!")
+                                }
                             }
                         }
                     } else {
-                        // array
-                        unimplemented!()
+                        // arrray
+                        let mut dim_array = vec![];
+                        for const_exp in const_exps {
+                            let dim = self.visit_const_exp(const_exp, scope);
+                            if let ValueKind::Integer(int) = imglobalvaluedata!(self, dim).kind() {
+                                dim_array.push(int.value());
+                            } else {
+                                panic!("Must be a const!")
+                            }
+                        }
+                        // calc space to alloc
+                        let mut array_len = 1;
+                        for dim in &dim_array {
+                            array_len *= dim;
+                        }
+                        if let InitListVal::InitArray(init_array) =
+                            self.visit_init_val(init_val, scope)
+                        {
+                            let regularized_init_val =
+                                self.regularization_init_list(dim_array.clone(), init_array, scope);
+                            let aggregate = globalvalue!(self, aggregate, regularized_init_val);
+                            let alloc = globalvalue!(self, global_alloc, aggregate);
+                            let mut alloc_name = var_ident.clone();
+                            alloc_name.insert_str(0, "%global_");
+                            self.program.set_value_name(alloc, Some(alloc_name.clone()));
+                            scope
+                                .block_node
+                                .insert_symbol(var_ident.clone(), Symbol::Array(alloc, dim_array));
+                        }
                     }
                 }
             }
@@ -362,37 +564,140 @@ impl Parser {
                             .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
                     } else {
                         // arrray
-                        unimplemented!()
+                        let mut dim_array = vec![];
+                        for const_exp in const_exps {
+                            let dim = self.visit_const_exp(const_exp, scope);
+                            if let ValueKind::Integer(int) =
+                                imvaluedata!(self, scope.function.unwrap(), dim).kind()
+                            {
+                                dim_array.push(int.value());
+                            } else {
+                                panic!("Must be a const!")
+                            }
+                        }
+                        // calc space to alloc
+                        let mut array_len = 1;
+                        for dim in &dim_array {
+                            array_len *= dim;
+                        }
+
+                        let array_type = Type::get_array(Type::get_i32(), array_len as usize);
+                        let alloc = value!(self, scope.function.unwrap(), alloc, array_type);
+                        insertvalue!(
+                            self,
+                            scope.function.unwrap(),
+                            scope.basic_block.unwrap(),
+                            [alloc]
+                        );
+                        scope
+                            .block_node
+                            .insert_symbol(var_ident.clone(), Symbol::Array(alloc, dim_array));
                     }
                 }
                 // with initial vals...
                 ast::VarDef::InitVal(var_ident, const_exps, init_val) => {
                     if const_exps.len() == 0 {
-                        let value = self.visit_init_val(init_val, scope);
-                        let alloc = value!(self, scope.function.unwrap(), alloc, Type::get_i32());
-                        let store = value!(self, scope.function.unwrap(), store, value, alloc);
+                        if let InitListVal::Exp(value) = self.visit_init_val(init_val, scope) {
+                            let alloc =
+                                value!(self, scope.function.unwrap(), alloc, Type::get_i32());
+                            let store = value!(self, scope.function.unwrap(), store, value, alloc);
+                            insertvalue!(
+                                self,
+                                scope.function.unwrap(),
+                                scope.basic_block.unwrap(),
+                                [alloc, store]
+                            );
+                            scope
+                                .block_node
+                                .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
+                        } else {
+                            panic!("Can not be array!")
+                        }
+                    } else {
+                        // arrray
+                        let mut dim_array = vec![];
+                        for const_exp in const_exps {
+                            let dim = self.visit_const_exp(const_exp, scope);
+                            if let ValueKind::Integer(int) =
+                                imvaluedata!(self, scope.function.unwrap(), dim).kind()
+                            {
+                                dim_array.push(int.value());
+                            } else {
+                                panic!("Must be a const!")
+                            }
+                        }
+                        // calc space to alloc
+                        let mut array_len = 1;
+                        for dim in &dim_array {
+                            array_len *= dim;
+                        }
+
+                        let array_type = Type::get_array(Type::get_i32(), array_len as usize);
+                        let alloc = value!(self, scope.function.unwrap(), alloc, array_type);
                         insertvalue!(
                             self,
                             scope.function.unwrap(),
                             scope.basic_block.unwrap(),
-                            [alloc, store]
+                            [alloc]
                         );
-                        scope
-                            .block_node
-                            .insert_symbol(var_ident.clone(), Symbol::Value(alloc));
-                    } else {
-                        // array
-                        unimplemented!()
+                        if let InitListVal::InitArray(init_array) =
+                            self.visit_init_val(init_val, scope)
+                        {
+                            let regularized_init_array =
+                                self.regularization_init_list(dim_array.clone(), init_array, scope);
+                            for elem_index in 0..regularized_init_array.len() {
+                                let index_value = value!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    integer,
+                                    elem_index as i32
+                                );
+                                let elem_ptr = value!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    get_elem_ptr,
+                                    alloc,
+                                    index_value
+                                );
+                                let store = value!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    store,
+                                    regularized_init_array[elem_index],
+                                    elem_ptr
+                                );
+                                insertvalue!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    scope.basic_block.unwrap(),
+                                    [elem_ptr, store]
+                                );
+                            }
+                            scope
+                                .block_node
+                                .insert_symbol(var_ident.clone(), Symbol::Array(alloc, dim_array));
+                        } else {
+                            panic!("Must be an array!")
+                        }
                     }
                 }
             }
         }
     }
 
-    fn visit_init_val(&mut self, init_val: &ast::InitVal, scope: &mut Scope) -> Value {
+    fn visit_init_val(&mut self, init_val: &ast::InitVal, scope: &mut Scope) -> InitListVal {
         match init_val {
-            ast::InitVal::Exp(exp) => self.visit_exp(exp, scope),
-            ast::InitVal::InitVal(_init_val) => unimplemented!(),
+            ast::InitVal::Exp(exp) => InitListVal::Exp(self.visit_exp(exp, scope)),
+            ast::InitVal::InitVal(init_val) => {
+                // const array init values...
+                let mut init_array = vec![];
+                if let Some(vals) = init_val {
+                    for val in vals {
+                        init_array.push(self.visit_init_val(val, scope))
+                    }
+                }
+                InitListVal::InitArray(init_array)
+            }
         }
     }
 
@@ -405,12 +710,18 @@ impl Parser {
             ast::Type::Void => Type::get_unit(),
         };
 
-        let function: Function;
-        if let Some(func_params) = &func_def.func_params {
+        let function = if let Some(func_params) = &func_def.func_params {
             let mut params: Vec<(Option<String>, Type)> = vec![];
             for func_param in func_params {
                 let param_type = match func_param.param_type {
-                    ast::Type::Int => Type::get_i32(),
+                    ast::Type::Int => {
+                        if let Some(_param_array) = &func_param.param_array {
+                            unimplemented!()
+                            //Type::get_pointer(Type::get_i32())
+                        } else {
+                            Type::get_i32()
+                        }
+                    }
                     _ => panic!("param type can not be void"),
                 };
                 let mut param_name = func_param.param_ident.clone();
@@ -418,16 +729,15 @@ impl Parser {
                 params.push((Some(param_name), param_type));
             }
 
-            function = self.program.new_func(FunctionData::with_param_names(
+            self.program.new_func(FunctionData::with_param_names(
                 sym_func_name,
                 params,
                 func_type,
-            ));
+            ))
         } else {
-            function =
-                self.program
-                    .new_func(FunctionData::new(sym_func_name, Vec::new(), func_type));
-        }
+            self.program
+                .new_func(FunctionData::new(sym_func_name, Vec::new(), func_type))
+        };
 
         self.bb_number.insert(function, 0); // init bb number for current function
 
@@ -1013,48 +1323,154 @@ impl Parser {
         } else {
             let value = self.visit_exp(&ass_stmt.exp, scope);
             let ass_l_value_symbol = scope.block_node.lookup_symbol(&ass_stmt.l_val.ident);
-            // must do some type check, because we can't assign to a const!
-            if let Symbol::Value(ass_l_value) = ass_l_value_symbol {
-                let store = value!(self, scope.function.unwrap(), store, value, ass_l_value);
-                insertvalue!(
-                    self,
-                    scope.function.unwrap(),
-                    scope.basic_block.unwrap(),
-                    [store]
-                );
-            } else {
-                panic!("Can not assign to a function!")
+            // TODO:must do some type check, because we can't assign to a const!
+            match ass_l_value_symbol {
+                Symbol::Value(ass_l_value) => {
+                    let store = value!(self, scope.function.unwrap(), store, value, ass_l_value);
+                    insertvalue!(
+                        self,
+                        scope.function.unwrap(),
+                        scope.basic_block.unwrap(),
+                        [store]
+                    );
+                }
+                Symbol::Array(array_value, dim_edge_array) => {
+                    // calc every dim size of dim_edge array
+                    let mut new_dim_edge_array = vec![];
+                    for index1 in 0..dim_edge_array.len() {
+                        let mut each_dim_size = 1;
+                        for index2 in index1 + 1..dim_edge_array.len() {
+                            each_dim_size *= dim_edge_array[index2];
+                        }
+                        new_dim_edge_array.push(each_dim_size);
+                    }
+
+                    // find position in array
+                    let mut dim_array = vec![];
+                    let mut const_dim_sum = 0;
+                    for exp_index in 0..ass_stmt.l_val.exps.len() {
+                        let exp_value = self.visit_exp(&ass_stmt.l_val.exps[exp_index], scope);
+                        match imvaluedata!(self, scope.function.unwrap(), exp_value).kind() {
+                            ValueKind::Integer(int) => {
+                                const_dim_sum += int.value() * new_dim_edge_array[exp_index];
+                            }
+                            _ => {
+                                // calc
+                                let dim_edge_value = value!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    integer,
+                                    new_dim_edge_array[exp_index]
+                                );
+                                let mul_value = value!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    binary,
+                                    BinaryOp::Mul,
+                                    exp_value,
+                                    dim_edge_value
+                                );
+                                insertvalue!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    scope.basic_block.unwrap(),
+                                    [mul_value]
+                                );
+                                dim_array.push(mul_value);
+                            }
+                        }
+                    }
+                    // add all dim to calc the offset
+                    let mut dim_sum_value =
+                        value!(self, scope.function.unwrap(), integer, const_dim_sum);
+                    for dim in dim_array {
+                        dim_sum_value = value!(
+                            self,
+                            scope.function.unwrap(),
+                            binary,
+                            BinaryOp::Add,
+                            dim_sum_value,
+                            dim
+                        );
+                        insertvalue!(
+                            self,
+                            scope.function.unwrap(),
+                            scope.basic_block.unwrap(),
+                            [dim_sum_value]
+                        );
+                    }
+                    //get element
+
+                    let ptr_value = value!(
+                        self,
+                        scope.function.unwrap(),
+                        get_elem_ptr,
+                        array_value,
+                        dim_sum_value
+                    );
+                    let store = value!(self, scope.function.unwrap(), store, value, ptr_value);
+                    insertvalue!(
+                        self,
+                        scope.function.unwrap(),
+                        scope.basic_block.unwrap(),
+                        [ptr_value, store]
+                    );
+                }
+                Symbol::Function(_) => {
+                    panic!("Can not assign to a function!")
+                }
             }
         }
     }
 
-    fn visit_l_val(&mut self, l_val: &ast::LVal, scope: &Scope) -> Value {
+    fn visit_l_val(&mut self, l_val: &ast::LVal, scope: &mut Scope) -> Value {
         if scope.is_global {
-            // look up symbol table...
-            let value_symbol = scope.block_node.lookup_symbol(&l_val.ident);
-            if let Symbol::Value(value) = value_symbol {
-                let value_data = imglobalvaluedata!(self, value);
-                // check if it is a const
-                if !matches!(value_data.kind(), ValueKind::Integer(_)) {
-                    panic!("Global left value must be a const!")
+            if l_val.exps.len() == 0 {
+                // look up symbol table...
+                let value_symbol = scope.block_node.lookup_symbol(&l_val.ident);
+                if let Symbol::Value(value) = value_symbol {
+                    let value_data = imglobalvaluedata!(self, value);
+                    // check if it is a const
+                    if !matches!(value_data.kind(), ValueKind::Integer(_)) {
+                        panic!("Global left value must be a const!")
+                    } else {
+                        value
+                    }
                 } else {
-                    value
+                    panic!("Left value can not be a function!")
                 }
             } else {
-                panic!("Left value can not be a function!")
+                panic!("R value can not be array in global scope!")
             }
         } else {
-            // look up symbol table...
-            let value_symbol = scope.block_node.lookup_symbol(&l_val.ident);
-            if let Symbol::Value(value) = value_symbol {
-                if value.is_global() {
-                    // If it is a const, change it to local value
-                    let value_data = imglobalvaluedata!(self, value);
-                    match value_data.kind() {
-                        ValueKind::Integer(int) => {
-                            value!(self, scope.function.unwrap(), integer, int.value())
+            if l_val.exps.len() == 0 {
+                // look up symbol table...
+                let value_symbol = scope.block_node.lookup_symbol(&l_val.ident);
+                if let Symbol::Value(value) = value_symbol {
+                    if value.is_global() {
+                        // If it is a const, change it to local value
+                        let value_data = imglobalvaluedata!(self, value);
+                        match value_data.kind() {
+                            ValueKind::Integer(int) => {
+                                value!(self, scope.function.unwrap(), integer, int.value())
+                            }
+                            ValueKind::GlobalAlloc(_alloc) => {
+                                let load = value!(self, scope.function.unwrap(), load, value);
+                                insertvalue!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    scope.basic_block.unwrap(),
+                                    [load]
+                                );
+                                load
+                            }
+                            _ => unimplemented!(),
                         }
-                        ValueKind::GlobalAlloc(_alloc) => {
+                    } else {
+                        let value_data = imvaluedata!(self, scope.function.unwrap(), value);
+
+                        if matches!(value_data.kind(), ValueKind::Alloc(_)) {
+                            // Need to load first for alloc
                             let load = value!(self, scope.function.unwrap(), load, value);
                             insertvalue!(
                                 self,
@@ -1063,28 +1479,102 @@ impl Parser {
                                 [load]
                             );
                             load
+                        } else {
+                            value
                         }
-                        _ => unimplemented!(),
                     }
                 } else {
-                    let value_data = imvaluedata!(self, scope.function.unwrap(), value);
+                    panic!("Expression must have a constant value!")
+                }
+            } else {
+                if let Symbol::Array(array_value, dim_edge_array) =
+                    scope.block_node.lookup_symbol(&l_val.ident)
+                {
+                    // calc every dim size of dim_edge array
+                    let mut new_dim_edge_array = vec![];
+                    for index1 in 0..dim_edge_array.len() {
+                        let mut each_dim_size = 1;
+                        for index2 in index1 + 1..dim_edge_array.len() {
+                            each_dim_size *= dim_edge_array[index2];
+                        }
+                        new_dim_edge_array.push(each_dim_size);
+                    }
 
-                    if matches!(value_data.kind(), ValueKind::Alloc(_)) {
-                        // Need to load first for alloc
-                        let load = value!(self, scope.function.unwrap(), load, value);
+                    // find position in array
+                    let mut dim_array = vec![];
+                    let mut const_dim_sum = 0;
+                    for exp_index in 0..l_val.exps.len() {
+                        let exp_value = self.visit_exp(&l_val.exps[exp_index], scope);
+                        match imvaluedata!(self, scope.function.unwrap(), exp_value).kind() {
+                            ValueKind::Integer(int) => {
+                                const_dim_sum += int.value() * new_dim_edge_array[exp_index];
+                            }
+                            _ => {
+                                // calc
+                                let dim_edge_value = value!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    integer,
+                                    new_dim_edge_array[exp_index]
+                                );
+                                let mul_value = value!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    binary,
+                                    BinaryOp::Mul,
+                                    exp_value,
+                                    dim_edge_value
+                                );
+                                insertvalue!(
+                                    self,
+                                    scope.function.unwrap(),
+                                    scope.basic_block.unwrap(),
+                                    [mul_value]
+                                );
+                                dim_array.push(mul_value);
+                            }
+                        }
+                    }
+                    // add all dim to calc the offset
+                    let mut dim_sum_value =
+                        value!(self, scope.function.unwrap(), integer, const_dim_sum);
+                    for dim in dim_array {
+                        dim_sum_value = value!(
+                            self,
+                            scope.function.unwrap(),
+                            binary,
+                            BinaryOp::Add,
+                            dim_sum_value,
+                            dim
+                        );
                         insertvalue!(
                             self,
                             scope.function.unwrap(),
                             scope.basic_block.unwrap(),
-                            [load]
+                            [dim_sum_value]
                         );
-                        load
-                    } else {
-                        value
                     }
+                    //get element
+
+                    let ptr_value = value!(
+                        self,
+                        scope.function.unwrap(),
+                        get_elem_ptr,
+                        array_value,
+                        dim_sum_value
+                    );
+                    let load = value!(self, scope.function.unwrap(), load, ptr_value);
+                    insertvalue!(
+                        self,
+                        scope.function.unwrap(),
+                        scope.basic_block.unwrap(),
+                        [ptr_value, load]
+                    );
+                    return load;
+                } else {
+                    println!("{:#?}", scope.block_node.lookup_symbol(&l_val.ident));
+                    panic!("Must be an array!")
                 }
-            } else {
-                panic!("Left value can not be a function!")
             }
         }
     }
@@ -2316,7 +2806,7 @@ impl Parser {
 
     pub fn parse(&mut self, source_code: &String) -> Result<&Program, Box<dyn Error>> {
         let ast = sysy::CompUnitParser::new().parse(&source_code).unwrap();
-        //println!("{:#?}", ast);
+        // println!("{:#?}", ast);
         let global_block_node = BlockNode::new();
         let mut scope = Scope {
             is_global: true,
